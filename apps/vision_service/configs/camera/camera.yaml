@@ -1,0 +1,19 @@
+camera_id: cam_001
+name: cong_1
+enabled: true
+
+stream:
+  type: hls
+  uri: "http://192.168.28.78:8080/210743ddafb0305394d540bb2dd29c35/hls/gqbb9Lhhcu/xNrdIEOExv/s.m3u8"
+  reconnect_interval_sec: 10
+  timeout_sec: 15
+
+detection:
+  min_confidence: 0.25
+  roi:
+    enabled: true
+    polygon:
+      - [40, 120]
+      - [400, 100]
+      - [500, 300]
+      - [40, 550]

@@ -1,0 +1,101 @@
+# ─── Python ────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+*.egg
+.eggs/
+build/
+dist/
+wheels/
+*.whl
+.pip-intermediate/
+.pip-download/
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+.tox/
+.nox/
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+env/
+
+# IDE / editors
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# ─── DeepStream / TensorRT / ONNX models ───────────────────────────────────
+*.engine
+*.onnx
+*.plan
+*.trt
+*.trtexec
+*.tensorrt/
+onnx2trt/
+triton_model_repo/
+tensorrt_cache/
+
+# Keep model weights in git-lfs or reference only
+# !*.onnx   # uncomment if you want to track ONNX files
+
+# ─── Docker ─────────────────────────────────────────────────────────────────
+.dockerignore
+
+# ─── Storage / output (never commit runtime data) ──────────────────────────
+storage/logs/
+storage/snapshots/
+storage/clips/
+storage/evidence/
+storage/rolling/
+storage/*.jsonl
+
+# Keep the directory structure (gitkeep), but not the contents
+storage/logs/.gitkeep
+storage/snapshots/.gitkeep
+storage/clips/.gitkeep
+storage/evidence/.gitkeep
+storage/rolling/.gitkeep
+
+# ─── PyTorch ────────────────────────────────────────────────────────────────
+.torch/
+*.pth
+*.pt
+*.pt.save
+
+# ─── Configuration / secrets ────────────────────────────────────────────────
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+*.crt
+secrets/
+
+# Keep example env files
+!.env.example
+
+# ─── VS Code (keep launch.json + tasks.json, ignore personal settings) ───────
+.vscode/settings.json
+
+# Keep these
+!.vscode/launch.json
+!.vscode/tasks.json
+
+# ─── OS ──────────────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ─── Logs ────────────────────────────────────────────────────────────────────
+*.log
+logs/*.mp4
+.nfs*

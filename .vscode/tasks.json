@@ -1,0 +1,15 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Run service",
+      "type": "shell",
+      "command": "python apps/vision_service/src/main.py"
+    },
+    {
+      "label": "Run tests",
+      "type": "shell",
+      "command": "pytest apps/vision_service/tests -q"
+    }
+  ]
+}

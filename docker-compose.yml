@@ -1,0 +1,54 @@
+# docker-compose.yml — DeepStream RTSP output pipeline
+#
+# Usage:
+#   docker compose up -d
+#
+# Prerequisites:
+#   - NVIDIA Container Toolkit + nvidia-docker2 on the host
+#   - NVIDIA DeepStream 6.4 SDK
+#
+version: "3.9"
+
+services:
+  vision-service:
+    build:
+      context: .
+      dockerfile: Dockerfile.ds64_glib
+    image: uit_medseg/vision-service:dev
+    container_name: uit_medseg_vision
+    restart: unless-stopped
+    shm_size: 2g
+    environment:
+      APP_ENV: ${APP_ENV:-development}
+      APP_NAME: uit-medseg-vision
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      GPU_ID: ${GPU_ID:-0}
+      CONFIG_DIR: /workspace/apps/vision_service/configs
+      NVIDIA_DRIVER_CAPABILITIES: "compute,utility,video,graphics"
+      PYTHONPATH: "/workspace"
+    volumes:
+      # Project root as read-only (code, configs, scripts)
+      - type: bind
+        source: ${PWD}
+        target: /workspace
+        read_only: false
+      # Models directory as read-write (for TensorRT engine output)
+      - type: bind
+        source: ${PWD}/apps/vision_service/models
+        target: /workspace/apps/vision_service/models
+      # Logs as read-write
+      - storage_logs:/workspace/storage/logs
+    ports:
+      # RTSP output stream (internal 8554 → host 8554)
+      - "8554:8554"
+    command: ["python3", "/workspace/apps/vision_service/src/main.py"]
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+volumes:
+  storage_logs:

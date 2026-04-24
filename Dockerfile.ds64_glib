@@ -1,0 +1,47 @@
+FROM nvcr.io/nvidia/deepstream:6.4-samples-multiarch
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+# ── System packages ────────────────────────────────────────────────────────────
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    make \
+    python3-pip \
+    python3-gi \
+    python3-gst-1.0 \
+    gir1.2-gstreamer-1.0 \
+    gir1.2-gst-rtsp-server-1.0 \
+    gettext \
+    && rm -rf /var/lib/apt/lists/*
+
+# ── Python deps ───────────────────────────────────────────────────────────────
+RUN pip3 install --no-cache-dir pydantic PyYAML || pip install --no-cache-dir pydantic PyYAML
+
+# ── pyds wheel (DeepStream Python binding) ─────────────────────────────────────
+COPY pyds-1.1.10-py3-none-linux_x86_64.whl /tmp/pyds.whl
+RUN mkdir -p /tmp/pyds_extracted && \
+    python3 -m zipfile -e /tmp/pyds.whl /tmp/pyds_extracted && \
+    cp /tmp/pyds_extracted/pyds.so /usr/local/lib/python3.10/dist-packages/ && \
+    cp -r /tmp/pyds_extracted/pyds-1.1.10.dist-info /usr/local/lib/python3.10/dist-packages/ && \
+    rm -rf /tmp/pyds_extracted /tmp/pyds.whl
+
+
+# 1. Chỉ copy những file cần thiết để compile parser C++ trước
+COPY apps/vision_service/src/deepstream/custom_parser /workspace/apps/vision_service/src/deepstream/custom_parser
+
+# 2. Compile parser
+RUN make -C /workspace/apps/vision_service/src/deepstream/custom_parser \
+        -j$(nproc) \
+        DS_LIB=/workspace/apps/vision_service/libs/deepstream/lib && \
+    echo "Custom parser compiled OK"
+    
+# 3. Sau khi compile xong, mới copy code Python và Models (vì code Python thay đổi thường xuyên nhất)
+COPY apps/vision_service/src      /workspace/apps/vision_service/src
+COPY apps/vision_service/configs  /workspace/apps/vision_service/configs
+# COPY apps/vision_service/models   /workspace/apps/vision_service/models
+
+ENV PYTHONPATH="/workspace"
+# ENV LD_LIBRARY_PATH=/workspace/apps/vision_service/libs/deepstream/lib:/opt/nvidia/deepstream/deepstream-6.4/lib:/usr/local/nvidia/lib64
+ENV LD_LIBRARY_PATH=/opt/nvidia/deepstream/deepstream-6.4/lib:/usr/local/nvidia/lib64:/workspace/apps/vision_service/libs/deepstream/lib
+
+CMD ["python3", "/workspace/apps/vision_service/src/main.py"]

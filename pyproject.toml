@@ -1,0 +1,117 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "uit-medseg"
+version = "0.1.0"
+description = "UIT-MedSeg MLOps — Real-time helmet/PPE violation detection for motorcycles using NVIDIA DeepStream"
+readme = "README.md"
+requires-python = ">=3.8"
+license = {text = "MIT"}
+authors = [
+    {name = "UIT MMLab", email = "mmlab@uit.edu.vn"},
+]
+keywords = ["deepstream", "helmet-detection", "ppe", "nvidia", "mlops", "computer-vision"]
+classifiers = [
+    "Development Status :: 3 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+
+dependencies = [
+    "pydantic>=2.0",
+    "pydantic-settings>=2.0",
+    "PyYAML>=6.0",
+    "pytest>=7.0",
+    "pytest-cov>=4.0",
+    "fastapi>=0.100",
+    "uvicorn[standard]>=0.23",
+    "python-dotenv>=1.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "black>=23.0",
+    "isort>=5.0",
+    "ruff>=0.1.0",
+]
+
+[project.scripts]
+uit-medseg = "apps.vision_service.src.main:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["apps.vision_service.*"]
+
+[tool.pytest.ini_options]
+testpaths = ["apps/vision_service/tests"]
+python_files = ["test_*.py"]
+python_functions = ["test_*"]
+addopts = [
+    "-ra",
+    "--strict-markers",
+    "--tb=short",
+]
+markers = [
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+    "unit: unit tests",
+    "integration: integration tests",
+]
+
+[tool.coverage.run]
+source = ["apps/vision_service/src"]
+omit = [
+    "*/tests/*",
+    "*/__pycache__/*",
+    "*/site-packages/*",
+]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "if __name__ == .__main__.:",
+    "raise NotImplementedError",
+    "if TYPE_CHECKING:",
+]
+
+[tool.black]
+line-length = 100
+target-version = ["py38", "py39", "py310", "py311"]
+include = '\.pyi?$'
+exclude = '''
+/(
+    \.git
+  | \.venv
+  | __pycache__
+  | \.pytest_cache
+  | \.eggs
+  | \.tox
+  | build
+  | dist
+)/
+'''
+
+[tool.isort]
+profile = "black"
+line_length = 100
+known_first_party = ["apps"]
+skip_gitignore = true
+skip = [".venv", "__pycache__", ".pytest_cache"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py38"
+fix = true
+show-fixes = true
+output-format = "full"
+show-source = true
+select = ["E", "F", "W", "I", "N", "UP", "B", "C4", "SIM"]
+ignore = ["E501", "B008", "C4", "SIM"]

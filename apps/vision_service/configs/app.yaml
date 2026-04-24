@@ -1,0 +1,57 @@
+app:
+  name: uit-medseg-vision
+  env: development
+  log_level: INFO
+  gpu_id: 0
+
+storage:
+  logs_dir: storage/logs
+
+events:
+  backend: file
+  output_file: storage/logs/events.jsonl
+
+streams:
+  # scan_camera_dir: /workspace/apps/vision_service/configs/camera
+  scan_camera_dir: camera
+
+pipeline:
+  streammux_width: 640
+  streammux_height: 640
+  batched_push_timeout_usec: 40000
+  max_sources: 1
+  sink: rtsp
+  frame_log_interval_sec: 5.0
+
+infer:
+  enabled: true
+  config_file: /workspace/apps/vision_service/configs/infer/pgie_yolov8_helmet.txt
+  unique_id: 1
+  summary_interval_sec: 5.0
+  emit_frame_events: false
+
+visualization:
+  enabled: true
+  display_text: true
+  display_bbox: true
+  display_clock: false
+  osd_process_mode: 0
+
+rtsp:
+  enabled: true
+  host: "127.0.0.1"
+  udp_port: 5400
+  rtsp_port: 8554
+  mount_point: "/vision"
+  codec: "h264"
+  bitrate: 4000000
+  iframe_interval: 30
+
+tracker:
+  enabled: true
+  gpu_id: 0
+  tracker_width: 640
+  tracker_height: 640
+  ll_lib_file: /opt/nvidia/deepstream/deepstream-6.4/lib/libnvds_nvmultiobjecttracker.so
+  ll_config_file: /opt/nvidia/deepstream/deepstream-6.4/samples/configs/deepstream-app/config_tracker_NvDCF_perf.yml
+  display_tracking_id: true
