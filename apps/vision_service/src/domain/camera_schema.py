@@ -17,6 +17,7 @@ class StreamConfig(BaseModel):
     uri: str
     reconnect_interval_sec: int = Field(default=10, ge=1)
     timeout_sec: int = Field(default=15, ge=1)
+    decoder_drop_frame_interval: int = Field(default=0, ge=0, le=30)
 
     @field_validator("uri")
     @classmethod

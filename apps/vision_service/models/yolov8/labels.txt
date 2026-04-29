@@ -1,2 +1,2 @@
-Safe_Motorcycle
-Violation_Motorcycle
+helmet
+no_helmet

@@ -7,9 +7,9 @@ model-engine-file=/workspace/apps/vision_service/models/yolov8/yolov8_helmet.onn
 labelfile-path=/workspace/apps/vision_service/models/yolov8/labels.txt
 
 batch-size=1
-network-mode=0
+network-mode=2
 num-detected-classes=2
-interval=0
+interval=1
 gie-unique-id=1
 process-mode=1
 network-type=0
@@ -24,4 +24,4 @@ custom-lib-path=/workspace/apps/vision_service/libs/deepstream/lib/libnvdsinfer_
 [class-attrs-all]
 topk=100
 nms-iou-threshold=0.55
-pre-cluster-threshold=0.5
+pre-cluster-threshold=0.25

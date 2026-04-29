@@ -1,6 +1,6 @@
 .PHONY: run build up down clean
 
-IMAGE  ?= uit_medseg/vision-service:dev
+IMAGE  ?= uit_medseg/mlops_thuc:dev
 PYTHON := python3
 COMPOSE := docker compose
 
@@ -10,7 +10,7 @@ COMPOSE := docker compose
 run:
 	@HOST_GPU_ID=$${HOST_GPU_ID:-1}; \
 	CONTAINER_GPU_ID=$${GPU_ID:-0}; \
-	echo ">>> Starting vision-service (host GPU $$HOST_GPU_ID -> container GPU $$CONTAINER_GPU_ID)..."; \
+	echo ">>> Starting mlops_thuc (host GPU $$HOST_GPU_ID -> container GPU $$CONTAINER_GPU_ID)..."; \
 	docker run -it --rm \
 		--name uit_medseg_vision \
 		--gpus device=$$HOST_GPU_ID \

@@ -13,11 +13,13 @@ logger = get_logger(__name__)
 
 
 def main() -> int:
-    logger.info("Validating GStreamer/DeepStream environment early...")
-    validate_gstreamer_factories()
-
     settings = load_settings()
     setup_logger(settings.app.log_level)
+    logger.info(
+        "Validating GStreamer/DeepStream environment early... | sink=%s",
+        settings.pipeline.sink,
+    )
+    validate_gstreamer_factories(settings.pipeline.sink)
 
     app = VisionApp(settings)
 
