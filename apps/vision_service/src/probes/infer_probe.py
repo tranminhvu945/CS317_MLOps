@@ -238,8 +238,17 @@ class InferProbe:
                 except StopIteration:
                     break
 
-                obj_meta.rect_params.border_width = 0
-                obj_meta.text_params.display_text = ""
+                rect_params = obj_meta.rect_params
+                text_params = obj_meta.text_params
+
+                # Always clear previous OSD state before filtering object metadata.
+                rect_params.border_width = 0
+                if hasattr(rect_params, "has_bg_color"):
+                    rect_params.has_bg_color = 0
+
+                text_params.display_text = ""
+                if hasattr(text_params, "set_bg_clr"):
+                    text_params.set_bg_clr = 0
 
                 unique_id = int(obj_meta.unique_component_id)
                 if unique_id != PGIE_UNIQUE_ID:
