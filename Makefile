@@ -1,16 +1,19 @@
-.PHONY: run build up down clean
+.PHONY: run build up down clean mediamtx-up mediamtx-down mediamtx-status publishers-up publishers-down publishers-status
 
-IMAGE  ?= uit_medseg/vision-service:dev
+IMAGE  ?= uit_medseg/mlops_thuc:dev
 PYTHON := python3
 COMPOSE := docker compose
+MEDIAMTX_SCRIPT := bash scripts/rtsp_sim_mediamtx.sh
 
 # ── Run ───────────────────────────────────────────────────────────────────────
 
 ## Run vision-service (no rebuild — uses existing image)
+## Auto-removes any stale container with the same name before starting.
 run:
 	@HOST_GPU_ID=$${HOST_GPU_ID:-1}; \
 	CONTAINER_GPU_ID=$${GPU_ID:-0}; \
-	echo ">>> Starting vision-service (host GPU $$HOST_GPU_ID -> container GPU $$CONTAINER_GPU_ID)..."; \
+	echo ">>> Starting mlops_thuc (host GPU $$HOST_GPU_ID -> container GPU $$CONTAINER_GPU_ID)..."; \
+	docker rm -f uit_medseg_vision 2>/dev/null || true; \
 	docker run -it --rm \
 		--name uit_medseg_vision \
 		--gpus device=$$HOST_GPU_ID \
@@ -75,3 +78,31 @@ clean:
 	rm -rf build/ dist/ *.egg-info/ 2>/dev/null || true
 	$(MAKE) -C apps/vision_service/src/deepstream/custom_parser clean 2>/dev/null || true
 	@echo ">>> Clean done."
+
+# ── MediaMTX (RTSP/RTMP ingest server) ──────────────────────────────────────
+
+## Start MediaMTX server (RTSP :8554, RTMP :1935, API :8888)
+mediamtx-up:
+	$(MEDIAMTX_SCRIPT) up
+
+## Stop MediaMTX server
+mediamtx-down:
+	$(MEDIAMTX_SCRIPT) down
+
+## Check MediaMTX server status
+mediamtx-status:
+	$(MEDIAMTX_SCRIPT) status
+
+# ── HLS Publishers (ffmpeg → RTMP → MediaMTX → HLS) ─────────────────────────
+
+## Start 4 HLS publishers (cam01..cam04 loop MP4 → RTMP → MediaMTX → HLS)
+publishers-up:
+	PROTOCOL=hls bash scripts/rtsp_sim_publishers.sh up
+
+## Stop all HLS publishers
+publishers-down:
+	bash scripts/rtsp_sim_publishers.sh down
+
+## Check HLS publishers status
+publishers-status:
+	PROTOCOL=hls bash scripts/rtsp_sim_publishers.sh status

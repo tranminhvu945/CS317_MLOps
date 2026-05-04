@@ -36,7 +36,7 @@ def main() -> None:
     SCRIPT_DIR  = os.path.dirname(os.path.abspath(__file__))
     PROJECT_DIR = os.path.dirname(SCRIPT_DIR)
 
-    SRC_PT   = "/mmlab_students/storageStudents/nguyenvd/uit_medseg/datasetMLOps/TrainYolo/runs/detect/helmet_training/run_13/weights/best.pt"
+    SRC_PT   = "/mmlab_students/storageStudents/nguyenvd/uit_medseg/datasetMLOps/TrainYolo/runs/detect/helmet_training/run_12/weights/best.pt"
     DST_ONNX = os.path.join(PROJECT_DIR, "apps/vision_service/models/yolov8/yolov8_helmet.onnx")
     ENGINE   = DST_ONNX + "_b1_gpu0_fp16.engine"
 

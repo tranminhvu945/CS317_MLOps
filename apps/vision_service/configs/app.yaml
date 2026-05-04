@@ -16,12 +16,21 @@ streams:
   scan_camera_dir: camera
 
 pipeline:
-  streammux_width: 640
-  streammux_height: 640
+  streammux_width: 960
+  streammux_height: 544
   batched_push_timeout_usec: 40000
-  max_sources: 1
-  sink: rtsp
+  max_sources: 16
+  sink: rtmp
   frame_log_interval_sec: 5.0
+
+tiler:
+  enabled: true
+  # rows/cols = 0 → tự động tính theo sqrt(n_cameras)
+  rows: 0
+  cols: 0
+  # Tổng kích thước output sau khi ghép tile
+  width: 1920
+  height: 1080
 
 infer:
   enabled: true
@@ -38,14 +47,36 @@ visualization:
   osd_process_mode: 0
 
 rtsp:
-  enabled: true
+  enabled: false
   host: "127.0.0.1"
   udp_port: 5400
   rtsp_port: 8554
   mount_point: "/vision"
   codec: "h264"
-  bitrate: 4000000
-  iframe_interval: 30
+  bitrate: 2500000
+  iframe_interval: 15
+  payload_type: 96
+  rtp_mtu: 1400
+  udp_buffer_size: 2097152
+  sps_pps_interval: -1
+  rtsp_repay_enabled: true
+  rtsp_repay_jitter_latency_ms: 0
+  rtsp_repay_jitter_drop_on_latency: true
+  rtsp_repay_leaky_queue_enabled: true
+  rtsp_transport: "tcp"
+  udpsink_sync: true
+  udpsink_async: false
+  udpsink_qos: false
+  debug_h264_output_file: ""
+
+rtmp:
+  enabled: true
+  # MediaMTX publish URL — dùng 127.0.0.1 vì container chạy với --net=host
+  # Khởi động MediaMTX trước: bash scripts/rtsp_sim_mediamtx.sh up
+  location: "rtmp://127.0.0.1:1935/vision1 live=1"
+  sink_sync: true
+  sink_async: false
+  streamable_mux: true
 
 tracker:
   enabled: true
@@ -54,4 +85,4 @@ tracker:
   tracker_height: 640
   ll_lib_file: /opt/nvidia/deepstream/deepstream-6.4/lib/libnvds_nvmultiobjecttracker.so
   ll_config_file: /opt/nvidia/deepstream/deepstream-6.4/samples/configs/deepstream-app/config_tracker_NvDCF_perf.yml
-  display_tracking_id: true
+  display_tracking_id: false

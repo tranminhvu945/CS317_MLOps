@@ -4,14 +4,18 @@ enabled: true
 
 stream:
   type: hls
+  # URI camera thật — HLS live stream
   uri: "http://192.168.28.78:8080/210743ddafb0305394d540bb2dd29c35/hls/gqbb9Lhhcu/xNrdIEOExv/s.m3u8"
+  # Fallback local HLS nếu camera thật không có mạng:
+  # uri: "http://127.0.0.1:8088/hls/cam_001/live.m3u8"
   reconnect_interval_sec: 10
   timeout_sec: 15
+  decoder_drop_frame_interval: 0
 
 detection:
-  min_confidence: 0.25
+  min_confidence: 0.15
   roi:
-    enabled: true
+    enabled: false
     polygon:
       - [40, 120]
       - [400, 100]

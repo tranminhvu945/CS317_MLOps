@@ -35,7 +35,7 @@ class PipelineConfig(BaseModel):
     streammux_height: int = Field(default=544, ge=1)
     batched_push_timeout_usec: int = Field(default=40000, ge=1)
     max_sources: int = Field(default=16, ge=1)
-    sink: Literal["fake", "display", "rtsp"] = "rtsp"
+    sink: Literal["fake", "display", "rtsp", "rtmp"] = "rtsp"
     frame_log_interval_sec: float = Field(default=5.0, ge=0.5)
 
 
@@ -64,6 +64,27 @@ class RtspConfig(BaseModel):
     codec: str = "h264"
     bitrate: int = Field(default=4000000, ge=100000)
     iframe_interval: int = Field(default=30, ge=1)
+    payload_type: int = Field(default=96, ge=96, le=127)
+    rtp_mtu: int = Field(default=1400, ge=576, le=9000)
+    udp_buffer_size: int = Field(default=2097152, ge=65536)
+    sps_pps_interval: int = Field(default=-1, ge=-1, le=3600)
+    rtsp_repay_enabled: bool = True
+    rtsp_repay_jitter_latency_ms: int = Field(default=0, ge=0, le=2000)
+    rtsp_repay_jitter_drop_on_latency: bool = True
+    rtsp_repay_leaky_queue_enabled: bool = True
+    rtsp_transport: Literal["all", "tcp", "udp"] = "all"
+    udpsink_sync: bool = True
+    udpsink_async: bool = False
+    udpsink_qos: bool = False
+    debug_h264_output_file: str = ""
+
+
+class RtmpConfig(BaseModel):
+    enabled: bool = True
+    location: str = "rtmp://127.0.0.1/live/vision live=1"
+    sink_sync: bool = False
+    sink_async: bool = False
+    streamable_mux: bool = True
 
 
 class TrackerConfig(BaseModel):
@@ -76,6 +97,14 @@ class TrackerConfig(BaseModel):
     display_tracking_id: bool = False
 
 
+class TilerConfig(BaseModel):
+    enabled: bool = True
+    rows: int = Field(default=0, ge=0, description="0 = tự động tính theo sqrt(n_cameras)")
+    cols: int = Field(default=0, ge=0, description="0 = tự động tính theo sqrt(n_cameras)")
+    width: int = Field(default=1920, ge=1, description="Tổng chiều rộng output sau khi ghép tile")
+    height: int = Field(default=1080, ge=1, description="Tổng chiều cao output sau khi ghép tile")
+
+
 class RootSettings(BaseModel):
     app: AppConfig
     storage: StorageConfig
@@ -84,8 +113,10 @@ class RootSettings(BaseModel):
     pipeline: PipelineConfig
     infer: InferConfig
     tracker: TrackerConfig
+    tiler: TilerConfig = Field(default_factory=TilerConfig)
     visualization: VisualizationConfig
     rtsp: RtspConfig
+    rtmp: RtmpConfig = Field(default_factory=RtmpConfig)
     cameras: List[CameraConfig] = Field(default_factory=list)
 
 
@@ -155,5 +186,4 @@ def load_settings() -> RootSettings:
     settings = settings.model_copy(update={"cameras": cameras})
 
     ensure_dir(settings.storage.logs_dir)
-
     return settings

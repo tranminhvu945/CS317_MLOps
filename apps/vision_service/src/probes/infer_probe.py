@@ -5,6 +5,13 @@ import uuid
 from collections import Counter
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+from apps.vision_service.src.pipeline.osd_draw import (
+    apply_safe_style,
+    apply_tracking_label,
+    apply_violation_style,
+    attach_roi_polygon,
+    attach_fps_label,
+)
 
 import gi
 
@@ -35,8 +42,8 @@ UINT64_MAX = 18446744073709551615
 
 PGIE_UNIQUE_ID = 1
 
-NO_HELMET_LABEL = "UnSafe"
-SAFE_OSD_LABEL = "Safe"
+NO_HELMET_LABEL = "no_helmet"
+SAFE_OSD_LABEL = "helmet"
 
 
 class InferProbe:
@@ -60,6 +67,31 @@ class InferProbe:
         self.window_frames = 0
         self.window_objects = 0
         self.window_counts_by_label: Counter[str] = Counter()
+
+        self.fps_last_at: dict[int, float] = {}
+        self.fps_frames: dict[int, int] = {}
+        self.current_fps: dict[int, float] = {}
+        self.window_probe_callback_ms: List[float] = []
+
+    def _update_fps(self, source_id: int) -> float:
+        """Tính FPS riêng biệt cho từng camera (source_id)."""
+        now = time.monotonic()
+
+        if source_id not in self.fps_last_at:
+            self.fps_last_at[source_id] = now
+            self.fps_frames[source_id] = 0
+            self.current_fps[source_id] = 0.0
+
+        self.fps_frames[source_id] += 1
+        elapsed = now - self.fps_last_at[source_id]
+
+        if elapsed >= 1.0:
+            self.current_fps[source_id] = self.fps_frames[source_id] / elapsed
+            self.fps_frames[source_id] = 0
+            self.fps_last_at[source_id] = now
+
+        return self.current_fps[source_id]
+
 
     def attach(self, element: Gst.Element, pad_name: str = "src") -> None:
         pad = element.get_static_pad(pad_name)
@@ -171,12 +203,15 @@ class InferProbe:
         info: Gst.PadProbeInfo,
         _user_data: object,
     ) -> Gst.PadProbeReturn:
+        callback_started_ns = time.perf_counter_ns()
         gst_buffer = info.get_buffer()
         if gst_buffer is None:
+            self._record_callback_time(callback_started_ns)
             return Gst.PadProbeReturn.OK
 
         batch_meta = pyds.gst_buffer_get_nvds_batch_meta(hash(gst_buffer))
         if batch_meta is None:
+            self._record_callback_time(callback_started_ns)
             return Gst.PadProbeReturn.OK
 
         canvas_w = float(self.settings.pipeline.streammux_width)
@@ -190,6 +225,11 @@ class InferProbe:
                 break
 
             camera_id = self._resolve_camera_id(frame_meta)
+            source_id = int(frame_meta.source_id)
+            fps = self._update_fps(source_id)
+            if self.settings.visualization.enabled:
+                attach_fps_label(batch_meta, frame_meta, fps)
+
 
             source_w, source_h = self._get_frame_resolution(frame_meta)
 
@@ -205,6 +245,18 @@ class InferProbe:
                     obj_meta = pyds.NvDsObjectMeta.cast(l_obj.data)
                 except StopIteration:
                     break
+
+                rect_params = obj_meta.rect_params
+                text_params = obj_meta.text_params
+
+                # Always clear previous OSD state before filtering object metadata.
+                rect_params.border_width = 0
+                if hasattr(rect_params, "has_bg_color"):
+                    rect_params.has_bg_color = 0
+
+                text_params.display_text = ""
+                if hasattr(text_params, "set_bg_clr"):
+                    text_params.set_bg_clr = 0
 
                 unique_id = int(obj_meta.unique_component_id)
                 if unique_id != PGIE_UNIQUE_ID:
@@ -234,8 +286,6 @@ class InferProbe:
                     in_roi = point_in_polygon(anchor, roi_polygon)
 
                 if not in_roi:
-                    obj_meta.rect_params.border_width = 0
-                    obj_meta.text_params.display_text = ""
                     l_obj = l_obj.next
                     continue
 
@@ -281,11 +331,32 @@ class InferProbe:
             except StopIteration:
                 break
 
+        self._record_callback_time(callback_started_ns)
         return Gst.PadProbeReturn.OK
+
+    def _record_callback_time(self, started_ns: int) -> None:
+        elapsed_ms = (time.perf_counter_ns() - started_ns) / 1e6
+        if elapsed_ms >= 0:
+            self.window_probe_callback_ms.append(elapsed_ms)
+
+    def _summarize_window_ms(self, values: List[float]) -> Tuple[float, float, float]:
+        if not values:
+            return 0.0, 0.0, 0.0
+
+        sorted_values = sorted(values)
+        count = len(sorted_values)
+        avg_ms = sum(sorted_values) / float(count)
+        p95_idx = max(0, min(count - 1, ((count * 95 + 99) // 100) - 1))
+        p95_ms = sorted_values[p95_idx]
+        max_ms = sorted_values[-1]
+        return avg_ms, p95_ms, max_ms
 
     def _emit_summary(self, now: float) -> None:
         elapsed = max(now - self.last_summary_at, 1e-6)
         fps_like = self.window_frames / elapsed
+        cb_avg_ms, cb_p95_ms, cb_max_ms = self._summarize_window_ms(
+            self.window_probe_callback_ms
+        )
 
         self.publisher.publish(
             event_type="detection_window_summary",
@@ -295,18 +366,27 @@ class InferProbe:
                 "objects": self.window_objects,
                 "counts_by_label": dict(self.window_counts_by_label),
                 "buffer_rate": round(fps_like, 3),
+                "probe_callback_ms": {
+                    "avg": round(cb_avg_ms, 4),
+                    "p95": round(cb_p95_ms, 4),
+                    "max": round(cb_max_ms, 4),
+                },
             },
         )
 
         logger.info(
-            "Detection summary | frames=%d | objects=%d | counts=%s | rate=%.2f/s",
+            "Detection summary | frames=%d | objects=%d | counts=%s | rate=%.2f/s | probe_cb_ms(avg/p95/max)=%.3f/%.3f/%.3f",
             self.window_frames,
             self.window_objects,
             dict(self.window_counts_by_label),
             fps_like,
+            cb_avg_ms,
+            cb_p95_ms,
+            cb_max_ms,
         )
 
         self.last_summary_at = now
         self.window_frames = 0
         self.window_objects = 0
         self.window_counts_by_label = Counter()
+        self.window_probe_callback_ms = []

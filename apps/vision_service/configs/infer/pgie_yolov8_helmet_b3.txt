@@ -3,10 +3,10 @@ gpu-id=0
 net-scale-factor=0.0039215697906911373
 model-color-format=0
 onnx-file=/workspace/apps/vision_service/models/yolov8/yolov8_helmet.onnx
-model-engine-file=/workspace/apps/vision_service/models/yolov8/yolov8_helmet.onnx_b1_gpu0_fp16.engine
+model-engine-file=/workspace/apps/vision_service/models/yolov8/yolov8_helmet.onnx_b3_gpu0_fp16.engine
 labelfile-path=/workspace/apps/vision_service/models/yolov8/labels.txt
 
-batch-size=1
+batch-size=3
 network-mode=2
 num-detected-classes=2
 interval=0

@@ -128,3 +128,28 @@ def attach_roi_polygon(
         _apply_rgba(line.line_color, ROI_LINE_COLOR_RGBA)
 
     pyds.nvds_add_display_meta_to_frame(frame_meta, display_meta)
+
+
+def attach_fps_label(
+    batch_meta: pyds.NvDsBatchMeta,
+    frame_meta: pyds.NvDsFrameMeta,
+    fps: float,
+    x_offset: int = 20,
+    y_offset: int = 30,
+) -> None:
+    display_meta = pyds.nvds_acquire_display_meta_from_pool(batch_meta)
+    display_meta.num_labels = 1
+
+    tp = display_meta.text_params[0]
+    tp.display_text = f"FPS: {fps:.1f}"
+    tp.x_offset = x_offset
+    tp.y_offset = y_offset
+
+    tp.font_params.font_name = "Sans"
+    tp.font_params.font_size = 18
+    _apply_rgba(tp.font_params.font_color, CAM_LABEL_COLOR_RGBA)
+
+    tp.set_bg_clr = 1
+    _apply_rgba(tp.text_bg_clr, TEXT_BG_RGBA)
+
+    pyds.nvds_add_display_meta_to_frame(frame_meta, display_meta)
