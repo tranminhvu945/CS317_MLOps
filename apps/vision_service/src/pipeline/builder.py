@@ -18,6 +18,7 @@ from apps.vision_service.src.pipeline.rtmp_output import create_rtmp_output_chai
 from apps.vision_service.src.pipeline.rtsp_output import create_rtsp_output_chain
 from apps.vision_service.src.pipeline.source_hls import create_hls_source_bin
 from apps.vision_service.src.pipeline.source_file import create_file_source_bin
+from apps.vision_service.src.pipeline.tiler import create_tiler
 from apps.vision_service.src.pipeline.tracker import create_tracker
 from apps.vision_service.src.probes.infer_probe import InferProbe
 from apps.vision_service.src.probes.stage_latency_probe import (
@@ -88,6 +89,7 @@ class PipelineBuilder:
         self.stage_latency_probe: StageLatencyProbe | None = None
 
         self._infer_assets = None
+        self.tiler: Gst.Element | None = None
         self.pre_osd_convert: Gst.Element | None = None
         self.pre_osd_capsfilter: Gst.Element | None = None
         self.osd: Gst.Element | None = None
@@ -187,12 +189,10 @@ class PipelineBuilder:
     def build(self) -> Gst.Pipeline:
         logger.info("Building DeepStream pipeline...")
 
-        if not self.settings.cameras:
+        cameras = self.settings.cameras
+        if not cameras:
             raise RuntimeError("No enabled cameras found in configs.")
-        if len(self.settings.cameras) > 1:
-            raise RuntimeError(
-                f"Only single-source is supported. Found {len(self.settings.cameras)} cameras."
-            )
+        n_cameras = len(cameras)
 
         pipeline = Gst.Pipeline.new("helmet-violation-pipeline")
         if pipeline is None:
@@ -242,6 +242,13 @@ class PipelineBuilder:
         self.debug_h264_file_queue = None
         self.debug_h264_file_sink = None
 
+        # --- Tiler: thêm nvmultistreamtiler cho multi-camera ---
+        if n_cameras > 1 and self.settings.tiler.enabled:
+            self.tiler = create_tiler(self.settings, n_cameras)
+        else:
+            self.tiler = None
+
+
         debug_h264_output_file = self.settings.rtsp.debug_h264_output_file.strip()
         if debug_h264_output_file:
             debug_output_path = Path(debug_h264_output_file).expanduser().resolve()
@@ -266,7 +273,7 @@ class PipelineBuilder:
         self._attach_queue_diagnostics(pre_osd_queue, "pre-osd")
         self._attach_queue_diagnostics(self.pre_encoder_queue, "pre-encoder")
 
-        streammux.set_property("batch-size", 1)
+        streammux.set_property("batch-size", n_cameras)
         streammux.set_property("width", self.settings.pipeline.streammux_width)
         streammux.set_property("height", self.settings.pipeline.streammux_height)
         streammux.set_property(
@@ -289,6 +296,8 @@ class PipelineBuilder:
             pipeline.add(tracker)
         pipeline.add(queue)
         pipeline.add(identity)
+        if self.tiler is not None:
+            pipeline.add(self.tiler)
         pipeline.add(pre_osd_queue)
         pipeline.add(self.pre_osd_convert)
         pipeline.add(self.pre_osd_capsfilter)
@@ -336,8 +345,16 @@ class PipelineBuilder:
 
         if not queue.link(identity):
             raise RuntimeError("Failed to link queue -> identity.")
-        if not identity.link(self.pre_osd_convert):
-            raise RuntimeError("Failed to link identity -> pre-osd-convert.")
+
+        # Nếu có tiler, chèn vào giữa identity và pre_osd_convert
+        if self.tiler is not None:
+            if not identity.link(self.tiler):
+                raise RuntimeError("Failed to link identity -> nvmultistreamtiler.")
+            if not self.tiler.link(self.pre_osd_convert):
+                raise RuntimeError("Failed to link nvmultistreamtiler -> pre-osd-convert.")
+        else:
+            if not identity.link(self.pre_osd_convert):
+                raise RuntimeError("Failed to link identity -> pre-osd-convert.")
         if not self.pre_osd_convert.link(self.pre_osd_capsfilter):
             raise RuntimeError("Failed to link pre-osd-convert -> pre-osd-capsfilter.")
         if not self.pre_osd_capsfilter.link(pre_osd_queue):
@@ -378,51 +395,66 @@ class PipelineBuilder:
                 raise RuntimeError("RTMP output chain does not support parser linking.")
             output_chain.link_from(parser_output)
 
-        camera = self.settings.cameras[0]
-        if camera.stream.type == "hls":
-            source_bin = create_hls_source_bin(
-                index=0,
-                uri=str(camera.stream.uri),
-                drop_frame_interval=camera.stream.decoder_drop_frame_interval,
+        # --- Tạo và kết nối tất cả sources ---
+        for idx, camera in enumerate(cameras):
+            if camera.stream.type == "hls" or camera.stream.type == "rtsp":
+                source_bin = create_hls_source_bin(
+                    index=idx,
+                    uri=str(camera.stream.uri),
+                    drop_frame_interval=camera.stream.decoder_drop_frame_interval,
+                )
+            elif camera.stream.type == "file":
+                source_bin = create_file_source_bin(
+                    index=idx,
+                    uri=str(camera.stream.uri),
+                    loop=camera.stream.loop,
+                )
+            else:
+                raise RuntimeError(f"Unsupported stream type: {camera.stream.type}")
+
+            pipeline.add(source_bin)
+
+            src_pad = source_bin.get_static_pad("src")
+            if src_pad is None:
+                raise RuntimeError(
+                    f"Failed to get src pad from source bin: {camera.camera_id}"
+                )
+
+            mux_sink_pad = request_streammux_sink_pad(streammux, index=idx)
+            result = src_pad.link(mux_sink_pad)
+            if result != Gst.PadLinkReturn.OK:
+                raise RuntimeError(
+                    f"Failed to link source bin -> nvstreammux "
+                    f"for camera={camera.camera_id}, result={result}"
+                )
+
+            self.source_bindings.append(
+                SourceBinding(
+                    camera_id=camera.camera_id,
+                    source_bin=source_bin,
+                    mux_sink_pad=mux_sink_pad,
+                )
             )
-        elif camera.stream.type == "file":
-            source_bin = create_file_source_bin(index=0, uri=str(camera.stream.uri))
-        else:
-            raise RuntimeError(f"Unsupported stream type: {camera.stream.type}")
-
-        pipeline.add(source_bin)
-
-        src_pad = source_bin.get_static_pad("src")
-        if src_pad is None:
-            raise RuntimeError(f"Failed to get src pad from source bin: {camera.camera_id}")
-
-        mux_sink_pad = request_streammux_sink_pad(streammux, index=0)
-        result = src_pad.link(mux_sink_pad)
-        if result != Gst.PadLinkReturn.OK:
-            raise RuntimeError(
-                f"Failed to link source bin -> nvstreammux "
-                f"for camera={camera.camera_id}, result={result}"
+            logger.info(
+                "Source linked | idx=%d | camera_id=%s | uri=%s",
+                idx,
+                camera.camera_id,
+                camera.stream.uri,
             )
 
-        self.source_bindings.append(
-            SourceBinding(
-                camera_id=camera.camera_id,
-                source_bin=source_bin,
-                mux_sink_pad=mux_sink_pad,
-            )
-        )
-
-        self.stage_latency_probe = StageLatencyProbe(
-            log_interval_sec=self.settings.pipeline.frame_log_interval_sec,
-        )
-
-        source_decode_probe_target = source_bin.get_by_name("source-queue-00")
+        # Gắn stage latency probe cho source đầu tiên (representative)
+        first_source_bin = self.source_bindings[0].source_bin
+        source_decode_probe_target = first_source_bin.get_by_name("source-queue-00")
         source_decode_probe_pad = "src"
         if source_decode_probe_target is None:
             logger.warning(
                 "source-queue-00 not found in source bin, fallback to source bin src pad for decode stage monitoring"
             )
-            source_decode_probe_target = source_bin
+            source_decode_probe_target = first_source_bin
+
+        self.stage_latency_probe = StageLatencyProbe(
+            log_interval_sec=self.settings.pipeline.frame_log_interval_sec,
+        )
 
         self.stage_latency_probe.attach_stage(
             source_decode_probe_target,
@@ -577,6 +609,15 @@ class PipelineBuilder:
         self.frame_monitor.attach(identity, pad_name="src")
         self.bus_handler.attach(pipeline)
 
+        # Đăng ký các file sources cần loop với BusHandler
+        file_source_bins = [
+            sb.source_bin
+            for sb in self.source_bindings
+            if getattr(sb.source_bin, "_loop", False)
+        ]
+        if file_source_bins:
+            self.bus_handler.register_loop_sources(pipeline, file_source_bins)
+
         self.pipeline = pipeline
         self.streammux = streammux
         self.infer = infer
@@ -585,9 +626,11 @@ class PipelineBuilder:
         self.identity = identity
 
         logger.info(
-            "Pipeline built | single-source | infer=%s | tracker=%s | sink=%s",
+            "Pipeline built | n_cameras=%d | infer=%s | tracker=%s | tiler=%s | sink=%s",
+            n_cameras,
             self.settings.infer.enabled,
             self.settings.tracker.enabled,
+            self.tiler is not None,
             self.settings.pipeline.sink,
         )
         return pipeline
@@ -635,4 +678,5 @@ class PipelineBuilder:
             self.infer = None
             self.streammux = None
             self.source_bindings = []
+            self.tiler = None
             self.pipeline = None

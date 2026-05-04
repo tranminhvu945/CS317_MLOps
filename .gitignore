@@ -99,3 +99,5 @@ desktop.ini
 *.log
 logs/*.mp4
 .nfs*
+
+data/

@@ -19,9 +19,18 @@ pipeline:
   streammux_width: 960
   streammux_height: 544
   batched_push_timeout_usec: 40000
-  max_sources: 1
+  max_sources: 16
   sink: rtmp
   frame_log_interval_sec: 5.0
+
+tiler:
+  enabled: true
+  # rows/cols = 0 → tự động tính theo sqrt(n_cameras)
+  rows: 0
+  cols: 0
+  # Tổng kích thước output sau khi ghép tile
+  width: 1920
+  height: 1080
 
 infer:
   enabled: true
@@ -62,8 +71,9 @@ rtsp:
 
 rtmp:
   enabled: true
-  # MediaMTX publish URL format: rtmp://<host>/<path>
-  location: "rtmp://192.168.20.154:1935/vision1 live=1"
+  # MediaMTX publish URL — dùng 127.0.0.1 vì container chạy với --net=host
+  # Khởi động MediaMTX trước: bash scripts/rtsp_sim_mediamtx.sh up
+  location: "rtmp://127.0.0.1:1935/vision1 live=1"
   sink_sync: true
   sink_async: false
   streamable_mux: true

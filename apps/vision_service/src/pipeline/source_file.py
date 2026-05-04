@@ -21,9 +21,16 @@ def _make_element(factory: str, name: str) -> Gst.Element:
 def create_file_source_bin(
     index: int,
     uri: str,
+    loop: bool = True,
 ) -> Gst.Bin:
     """
-    Create a file source bin: uridecodebin -> queue -> ghost src pad.
+    Create a file source bin: uridecodebin → queue → ghost src pad.
+
+    Args:
+        index:  Chỉ số source (0-based), dùng để đặt tên unique cho elements.
+        uri:    URI file video (dạng file:///path/to/file.mp4).
+        loop:   Được xử lý ở cấp pipeline bus (BusHandler), không ở đây.
+                Tham số này được giữ lại để BusHandler biết source nào cần loop.
     """
     bin_name = f"source-bin-{index:02d}"
     source_bin = Gst.Bin.new(bin_name)
@@ -34,6 +41,18 @@ def create_file_source_bin(
     queue = _make_element("queue", f"source-queue-{index:02d}")
 
     decodebin.set_property("uri", uri)
+    # Tắt buffering để giảm độ trễ với file local
+    if decodebin.find_property("use-buffering") is not None:
+        decodebin.set_property("use-buffering", False)
+
+    # Cấu hình queue cho live-like playback
+    queue.set_property("max-size-buffers", 8)
+    queue.set_property("max-size-bytes", 0)
+    queue.set_property("max-size-time", 0)
+    if queue.find_property("flush-on-eos") is not None:
+        queue.set_property("flush-on-eos", True)
+    if queue.find_property("silent") is not None:
+        queue.set_property("silent", True)
 
     source_bin.add(decodebin)
     source_bin.add(queue)
@@ -77,5 +96,14 @@ def create_file_source_bin(
     if not source_bin.add_pad(ghost_pad):
         raise RuntimeError(f"Failed to add ghost pad to source bin: {bin_name}")
 
-    logger.info("Created file source bin: %s | uri=%s", bin_name, uri)
+    # Lưu metadata cho BusHandler biết cách xử lý EOS
+    source_bin._loop = loop  # type: ignore[attr-defined]
+    source_bin._decodebin = decodebin  # type: ignore[attr-defined]
+
+    logger.info(
+        "Created file source bin: %s | uri=%s | loop=%s",
+        bin_name,
+        uri,
+        loop,
+    )
     return source_bin

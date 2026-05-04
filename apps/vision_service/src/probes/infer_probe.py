@@ -68,22 +68,29 @@ class InferProbe:
         self.window_objects = 0
         self.window_counts_by_label: Counter[str] = Counter()
 
-        self.fps_last_at = time.monotonic()
-        self.fps_frames = 0
-        self.current_fps = 0.0
+        self.fps_last_at: dict[int, float] = {}
+        self.fps_frames: dict[int, int] = {}
+        self.current_fps: dict[int, float] = {}
         self.window_probe_callback_ms: List[float] = []
 
-    def _update_fps(self) -> float:
-        self.fps_frames += 1
+    def _update_fps(self, source_id: int) -> float:
+        """Tính FPS riêng biệt cho từng camera (source_id)."""
         now = time.monotonic()
-        elapsed = now - self.fps_last_at
+
+        if source_id not in self.fps_last_at:
+            self.fps_last_at[source_id] = now
+            self.fps_frames[source_id] = 0
+            self.current_fps[source_id] = 0.0
+
+        self.fps_frames[source_id] += 1
+        elapsed = now - self.fps_last_at[source_id]
 
         if elapsed >= 1.0:
-            self.current_fps = self.fps_frames / elapsed
-            self.fps_frames = 0
-            self.fps_last_at = now
+            self.current_fps[source_id] = self.fps_frames[source_id] / elapsed
+            self.fps_frames[source_id] = 0
+            self.fps_last_at[source_id] = now
 
-        return self.current_fps
+        return self.current_fps[source_id]
 
 
     def attach(self, element: Gst.Element, pad_name: str = "src") -> None:
@@ -218,7 +225,8 @@ class InferProbe:
                 break
 
             camera_id = self._resolve_camera_id(frame_meta)
-            fps = self._update_fps()
+            source_id = int(frame_meta.source_id)
+            fps = self._update_fps(source_id)
             if self.settings.visualization.enabled:
                 attach_fps_label(batch_meta, frame_meta, fps)
 

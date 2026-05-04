@@ -97,6 +97,14 @@ class TrackerConfig(BaseModel):
     display_tracking_id: bool = False
 
 
+class TilerConfig(BaseModel):
+    enabled: bool = True
+    rows: int = Field(default=0, ge=0, description="0 = tự động tính theo sqrt(n_cameras)")
+    cols: int = Field(default=0, ge=0, description="0 = tự động tính theo sqrt(n_cameras)")
+    width: int = Field(default=1920, ge=1, description="Tổng chiều rộng output sau khi ghép tile")
+    height: int = Field(default=1080, ge=1, description="Tổng chiều cao output sau khi ghép tile")
+
+
 class RootSettings(BaseModel):
     app: AppConfig
     storage: StorageConfig
@@ -105,6 +113,7 @@ class RootSettings(BaseModel):
     pipeline: PipelineConfig
     infer: InferConfig
     tracker: TrackerConfig
+    tiler: TilerConfig = Field(default_factory=TilerConfig)
     visualization: VisualizationConfig
     rtsp: RtspConfig
     rtmp: RtmpConfig = Field(default_factory=RtmpConfig)
