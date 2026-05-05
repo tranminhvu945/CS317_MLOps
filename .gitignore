@@ -94,10 +94,13 @@ secrets/
 .DS_Store
 Thumbs.db
 desktop.ini
-
+*.tar
 # ─── Logs ────────────────────────────────────────────────────────────────────
 *.log
 logs/*.mp4
 .nfs*
-
+.dvc/
 data/
+dataset/yolo_helmet_dataset/
+dataset/TrainYolo/runs/
+/yolo_helmet_dataset.tar
