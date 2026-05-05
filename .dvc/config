@@ -1,0 +1,3 @@
+[cache]
+    type = "hardlink,symlink"
+    protected = true
