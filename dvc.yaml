@@ -1,0 +1,28 @@
+stages:
+
+  # ─── Stage 3: Huấn luyện model YOLO ──────────────────────────────────────
+  # Nhận shards làm input → MLflow tự log metrics
+  train:
+    cmd: python dataset/TrainYolo/train_webdataset.py
+    deps:
+      - dataset/TrainYolo/train_webdataset.py
+      - dataset/shards
+      - dataset/yolo_helmet_dataset/dataset.yaml
+    params:
+      - params.yaml:
+          - model.name
+          - train.epochs
+          - train.imgsz
+          - train.batch
+          - train.patience
+          - train.device
+          - train.project
+          - train.name
+          - mlflow.experiment_name
+          - mlflow.run_name
+    outs:
+      - helmet_training/run_1/weights/best.pt:
+          cache: true
+    metrics:
+      - helmet_training/run_1/results.csv:
+          cache: false

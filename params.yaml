@@ -1,0 +1,32 @@
+# ─── Cấu hình Dataset ─────────────────────────────────────────────────────────
+dataset:
+  root: dataset/raw/yolo_helmet_dataset
+  yaml: dataset/dataset.yaml
+
+# ─── Cấu hình Model ───────────────────────────────────────────────────────────
+model:
+  name: yolov8n.pt  # yolov8n / yolov8s / yolov8m / yolov8l / yolov8x
+
+# ─── WebDataset Sharding ──────────────────────────────────────────────────────
+sharding:
+  output_dir: dataset/shards   # Thư mục chứa các file .tar shards
+  shard_size: 1000             # Số ảnh mỗi shard
+  # train: 51599 ảnh → ~52 shards × 1000 ảnh
+  # val  :  7226 ảnh →   8 shards × 1000 ảnh
+  # test : 14942 ảnh →  15 shards × 1000 ảnh
+
+# ─── Hyperparameters huấn luyện ───────────────────────────────────────────────
+train:
+  epochs: 15
+  imgsz: 640
+  batch: 320
+  patience: 4
+  device: [4, 5, 6, 7]
+  project: helmet_training
+  name: run_1
+
+# ─── MLflow Tracking ──────────────────────────────────────────────────────────
+mlflow:
+  experiment_name: Helmet_Detection_Project
+  run_name: yolov8_binary_class
+  # tracking_uri: http://localhost:5000
