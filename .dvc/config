@@ -1,3 +1,7 @@
 [cache]
     type = "hardlink,symlink"
     protected = true
+[core]
+    remote = local_remote
+['remote "local_remote"']
+    url = /mmlab_students/storageStudents/nguyenvd/uit_medseg/datasetMLOps

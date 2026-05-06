@@ -103,4 +103,4 @@ logs/*.mp4
 data/
 dataset/yolo_helmet_dataset/
 dataset/TrainYolo/runs/
-/yolo_helmet_dataset.tar
+dataset/raw/

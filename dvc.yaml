@@ -7,7 +7,7 @@ stages:
     deps:
       - dataset/TrainYolo/train_webdataset.py
       - dataset/shards
-      - dataset/yolo_helmet_dataset/dataset.yaml
+      - dataset/dataset.yaml
     params:
       - params.yaml:
           - model.name

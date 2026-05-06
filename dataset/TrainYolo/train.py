@@ -1,37 +1,47 @@
 from ultralytics import YOLO
 import os
+import yaml
 
-# 1. Cấu hình MLflow Tracking (YOLOv8 tự động nhận diện nếu đã cài thư viện mlflow)
-os.environ["MLFLOW_EXPERIMENT_NAME"] = "Helmet_Detection_Project"
-os.environ["MLFLOW_RUN"] = "yolov8_binary_class"
-# os.environ["MLFLOW_TRACKING_URI"] = "http://localhost:5000" # Mở comment dòng này nếu bạn có tracking server riêng
+# ─── Đọc hyperparameters từ params.yaml (DVC quản lý) ────────────────────────
+with open("params.yaml", "r") as f:
+    params = yaml.safe_load(f)
+
+train_cfg = params["train"]
+model_cfg = params["model"]
+mlflow_cfg = params["mlflow"]
+
+# ─── Cấu hình MLflow Tracking ────────────────────────────────────────────────
+# Ultralytics tự động phát hiện biến môi trường MLFLOW_* và ghi log
+os.environ["MLFLOW_EXPERIMENT_NAME"] = mlflow_cfg["experiment_name"]
+os.environ["MLFLOW_RUN"] = mlflow_cfg["run_name"]
+if mlflow_cfg.get("tracking_uri"):
+    os.environ["MLFLOW_TRACKING_URI"] = mlflow_cfg["tracking_uri"]
+
 
 def main():
-    print("Khởi tạo mô hình YOLOv8 Nano...")
-    # Tải pre-trained model (nên bắt đầu với bản 'n' - nano để test trước cho nhẹ)
-    model = YOLO("yolov8n.pt") 
+    print(f"Khởi tạo mô hình {model_cfg['name']}...")
+    model = YOLO(model_cfg["name"])
 
     print("Bắt đầu quá trình huấn luyện...")
-    # Cấu hình các tham số train
     results = model.train(
-        data="/mmlab_students/storageStudents/nguyenvd/uit_medseg/datasetMLOps/osfstorage/yolo_helmet/dataset.yaml",
-        epochs=15,                  # Số vòng lặp qua toàn bộ dataset
-        imgsz=640,                  # Kích thước ảnh đầu vào
-        batch=320,                   # Số ảnh đưa vào GPU mỗi lần (Giảm xuống 8 nếu GPU báo lỗi Out Of Memory)
-        device=[4,5,6,7],                   # Sử dụng GPU đầu tiên (cuda:0)
-        patience=4,                # Early stopping: Dừng sớm nếu sau 10 epoch không cải thiện
-        project="helmet_training",  # Thư mục lưu kết quả model (weights/best.pt)
-        name="run_1"                # Tên thư mục con lưu kết quả của lần chạy này
+        data=params["dataset"]["yaml"],
+        epochs=train_cfg["epochs"],
+        imgsz=train_cfg["imgsz"],
+        batch=train_cfg["batch"],
+        device=train_cfg["device"],
+        patience=train_cfg["patience"],
+        project=train_cfg["project"],
+        name=train_cfg["name"],
     )
 
-    print("Huấn luyện hoàn tất! Weights tốt nhất được lưu trong thư mục 'helmet_training/run_1/weights/best.pt'")
+    print(f"Huấn luyện hoàn tất! Weights tốt nhất lưu tại: {train_cfg['project']}/{train_cfg['name']}/weights/best.pt")
 
-    # Chạy kiểm thử tự động trên tập Test sau khi train xong
+    # ─── Đánh giá trên tập Test ───────────────────────────────────────────────
     print("\nTiến hành đánh giá trên tập Test...")
-    metrics = model.val(split='test')
-    print(f"mAP50-95 trên tập Test: {metrics.box.map:.4f}")
+    metrics = model.val(split="test")
+    print(f"mAP50    : {metrics.box.map50:.4f}")
+    print(f"mAP50-95 : {metrics.box.map:.4f}")
+
 
 if __name__ == "__main__":
     main()
-
-
