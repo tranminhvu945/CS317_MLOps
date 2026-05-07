@@ -1,0 +1,15 @@
+artifact_uri: mlflow-artifacts:/226692046239906336/eb8a2059e0084504b38efc515192211c/artifacts
+deleted_time: 1778126944815
+end_time: 1778124740138
+entry_point_name: ''
+experiment_id: '226692046239906336'
+lifecycle_stage: deleted
+run_id: eb8a2059e0084504b38efc515192211c
+run_name: test_pipeline
+source_name: ''
+source_type: 4
+source_version: ''
+start_time: 1778124682358
+status: 3
+tags: []
+user_id: uit_medseg

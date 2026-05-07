@@ -1,0 +1,14 @@
+artifact_uri: mlflow-artifacts:/827352182578235323/42a3314504b445a6857d6e45b02c2851/artifacts
+end_time: 1778124770816
+entry_point_name: ''
+experiment_id: '827352182578235323'
+lifecycle_stage: active
+run_id: 42a3314504b445a6857d6e45b02c2851
+run_name: yolov8_binary_class
+source_name: ''
+source_type: 4
+source_version: ''
+start_time: 1778124651916
+status: 3
+tags: []
+user_id: uit_medseg

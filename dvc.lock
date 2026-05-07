@@ -1,0 +1,59 @@
+schema: '2.0'
+stages:
+  extract:
+    cmd: python scripts/extract_shards.py --shards-dir dataset/shards 
+      --output-dir dataset/extracted/yolo_helmet_dataset --limit 1
+    deps:
+    - path: dataset/shards
+      hash: md5
+      md5: 4e2b0c957cc8cf3dfa9722463f47b9bd.dir
+      size: 23826770418
+      nfiles: 76
+    - path: scripts/extract_shards.py
+      hash: md5
+      md5: 9cf81fa3d461ea0956d1699be2cacfb0
+      size: 3422
+    outs:
+    - path: dataset/extracted/yolo_helmet_dataset
+      hash: md5
+      md5: 2d9f00a613dd9f9f2908578064c5bdf1.dir
+      size: 1104881408
+      nfiles: 6000
+  train:
+    cmd: python dataset/TrainYolo/train_yolo.py
+    deps:
+    - path: dataset/TrainYolo/train_yolo.py
+      hash: md5
+      md5: 8ea1f7266f449b1bbaf97bb0fe09cf97
+      size: 1862
+    - path: dataset/dataset.yaml
+      hash: md5
+      md5: b58be0619991ec97ce0a509b6343eec5
+      size: 580
+    - path: dataset/extracted/yolo_helmet_dataset
+      hash: md5
+      md5: 2d9f00a613dd9f9f2908578064c5bdf1.dir
+      size: 1104881408
+      nfiles: 6000
+    params:
+      params.yaml:
+        model.name: yolov8n.pt
+        train.batch: 64
+        train.device:
+        - 4
+        - 5
+        train.epochs: 1
+        train.imgsz: 640
+        train.name: yolov8_binary_class
+        train.patience: 4
+        train.project: Helmet_Detection_Project
+    outs:
+    - path: runs/detect/Helmet_Detection_Project/yolov8_binary_class/results.csv
+      hash: md5
+      md5: 128cac79cceeadade096c016c8009f61
+      size: 315
+    - path: 
+        runs/detect/Helmet_Detection_Project/yolov8_binary_class/weights/best.pt
+      hash: md5
+      md5: 3962074c530718aa230da329e55707f8
+      size: 6220394
