@@ -33,3 +33,6 @@ numpy>=1.24.0
 
 # MLOps / DVC
 dvc>=3.50.0
+
+# Monitoring / Observability
+prometheus-client>=0.20.0

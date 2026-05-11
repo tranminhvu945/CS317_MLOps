@@ -97,6 +97,11 @@ class TrackerConfig(BaseModel):
     display_tracking_id: bool = False
 
 
+class MetricsConfig(BaseModel):
+    enabled: bool = True
+    port: int = Field(default=9100, ge=1024, le=65535)
+
+
 class TilerConfig(BaseModel):
     enabled: bool = True
     rows: int = Field(default=0, ge=0, description="0 = tự động tính theo sqrt(n_cameras)")
@@ -117,6 +122,7 @@ class RootSettings(BaseModel):
     visualization: VisualizationConfig
     rtsp: RtspConfig
     rtmp: RtmpConfig = Field(default_factory=RtmpConfig)
+    metrics: MetricsConfig = Field(default_factory=MetricsConfig)
     cameras: List[CameraConfig] = Field(default_factory=list)
 
 

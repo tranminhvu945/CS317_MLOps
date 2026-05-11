@@ -1,0 +1,43 @@
+# monitoring/prometheus/prometheus.yml
+# Prometheus configuration for UIT MedSeg DeepStream Monitoring
+#
+# Scrapes the vision-service Prometheus metrics endpoint every 5 seconds.
+# When running with --net=host (make run), vision-service is on 127.0.0.1:9100.
+# When running via docker compose, use service name: vision-service:9100.
+
+global:
+  scrape_interval: 5s          # Scrape every 5 seconds
+  evaluation_interval: 5s      # Evaluate rules every 5 seconds
+  external_labels:
+    project: "uit-medseg-deepstream"
+    env: "development"
+
+# ── Alerting (optional — can wire to Alertmanager later) ──────────────────────
+# alerting:
+#   alertmanagers:
+#     - static_configs:
+#         - targets: ["alertmanager:9093"]
+
+# ── Scrape configs ────────────────────────────────────────────────────────────
+scrape_configs:
+
+  # Vision service metrics (DeepStream pipeline)
+  - job_name: "vision_service"
+    scrape_interval: 5s
+    scrape_timeout: 4s
+    metrics_path: /metrics
+    static_configs:
+      - targets:
+          # Khi vision-service chạy với --net=host (make run),
+          # dùng host.docker.internal để reach từ bên trong container
+          - "host.docker.internal:9100"
+        labels:
+          service: "vision_service"
+          component: "deepstream_pipeline"
+
+  # Self-monitoring: Prometheus itself
+  - job_name: "prometheus"
+    static_configs:
+      - targets: ["localhost:9090"]
+        labels:
+          service: "prometheus"

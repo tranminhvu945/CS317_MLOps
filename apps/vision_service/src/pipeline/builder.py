@@ -21,6 +21,7 @@ from apps.vision_service.src.pipeline.source_file import create_file_source_bin
 from apps.vision_service.src.pipeline.tiler import create_tiler
 from apps.vision_service.src.pipeline.tracker import create_tracker
 from apps.vision_service.src.probes.infer_probe import InferProbe
+from apps.vision_service.src.probes.runtime_metrics_probe import RuntimeMetricsProbe
 from apps.vision_service.src.probes.stage_latency_probe import (
     MODE_META_FRAME,
     MODE_PTS_VIA_BUFFER,
@@ -87,6 +88,7 @@ class PipelineBuilder:
         )
         self.infer_probe: InferProbe | None = None
         self.stage_latency_probe: StageLatencyProbe | None = None
+        self.runtime_metrics_probe: RuntimeMetricsProbe | None = None
 
         self._infer_assets = None
         self.tiler: Gst.Element | None = None
@@ -605,6 +607,37 @@ class PipelineBuilder:
                 publisher=self.event_publisher,
             )
             self.infer_probe.attach(probe_element, pad_name="src")
+
+        # RuntimeMetricsProbe (FPS, Queue level, System)
+        queue_elements = {
+            "post-tracker": queue,
+            "pre-osd": pre_osd_queue,
+            "pre-encoder": self.pre_encoder_queue,
+        }
+        self.runtime_metrics_probe = RuntimeMetricsProbe(
+            settings=self.settings,
+            publisher=self.event_publisher,
+            queue_elements=queue_elements,
+            log_interval_sec=self.settings.pipeline.frame_log_interval_sec,
+        )
+        
+        # Attach input stage
+        for sb in self.source_bindings:
+            self.runtime_metrics_probe.attach_input_stage(
+                sb.source_bin,
+                source_id=self.source_bindings.index(sb),
+                camera_id=sb.camera_id,
+                pad_name="src"
+            )
+            
+        # Attach infer stage
+        if infer is not None:
+            self.runtime_metrics_probe.attach_infer_stage(infer, pad_name="src")
+            
+        # Attach output stage
+        if self.parser is not None:
+            self.runtime_metrics_probe.attach_output_stage(self.parser, pad_name="src")
+
 
         self.frame_monitor.attach(identity, pad_name="src")
         self.bus_handler.attach(pipeline)

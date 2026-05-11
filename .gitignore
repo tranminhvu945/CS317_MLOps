@@ -101,3 +101,8 @@ logs/*.mp4
 .nfs*
 
 data/
+
+# ─── Monitoring (Prometheus / Grafana runtime data) ──────────────────────────
+# Keep monitoring/config files, ignore Docker-volume-mounted runtime data
+monitoring/grafana/data/
+monitoring/prometheus/data/
