@@ -23,6 +23,7 @@ class VisionApp:
 
     def run(self) -> None:
         self._register_signal_handlers()
+        self._start_metrics_server()
 
         try:
             self.pipeline_builder.build()
@@ -39,6 +40,35 @@ class VisionApp:
                 self.main_loop.quit()
             except Exception:
                 pass
+
+    # ------------------------------------------------------------------
+    # Prometheus metrics server
+    # ------------------------------------------------------------------
+
+    def _start_metrics_server(self) -> None:
+        """Start Prometheus HTTP /metrics server if enabled in config."""
+        if not self.settings.metrics.enabled:
+            logger.info("Prometheus metrics server disabled (metrics.enabled=false)")
+            return
+
+        port = self.settings.metrics.port
+        try:
+            from apps.vision_service.src.services.metrics_exporter import (  # noqa: PLC0415
+                get_metrics_exporter,
+            )
+            exporter = get_metrics_exporter()
+            exporter.start_server(port)
+        except ImportError:
+            logger.warning(
+                "prometheus_client not installed — metrics server skipped. "
+                "Run: pip install prometheus-client>=0.20.0"
+            )
+        except Exception as exc:
+            logger.error("Failed to start metrics server on port %d: %s", port, exc)
+
+    # ------------------------------------------------------------------
+    # Signal handling
+    # ------------------------------------------------------------------
 
     def _register_signal_handlers(self) -> None:
         def _handle_signal(signum, _frame) -> None:

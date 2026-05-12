@@ -15,7 +15,8 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # ── Python deps ───────────────────────────────────────────────────────────────
-RUN pip3 install --no-cache-dir pydantic PyYAML || pip install --no-cache-dir pydantic PyYAML
+RUN pip3 install --no-cache-dir pydantic PyYAML prometheus-client || \
+    pip install --no-cache-dir pydantic PyYAML prometheus-client
 
 # ── pyds wheel (DeepStream Python binding) ─────────────────────────────────────
 COPY pyds-1.1.10-py3-none-linux_x86_64.whl /tmp/pyds.whl

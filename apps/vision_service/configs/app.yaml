@@ -86,3 +86,8 @@ tracker:
   ll_lib_file: /opt/nvidia/deepstream/deepstream-6.4/lib/libnvds_nvmultiobjecttracker.so
   ll_config_file: /opt/nvidia/deepstream/deepstream-6.4/samples/configs/deepstream-app/config_tracker_NvDCF_perf.yml
   display_tracking_id: false
+
+metrics:
+  enabled: true
+  # Prometheus scrape endpoint (HTTP) — exposed to host via --net=host
+  port: 9100

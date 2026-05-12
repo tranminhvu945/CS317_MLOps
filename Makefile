@@ -1,4 +1,4 @@
-.PHONY: run build up down clean mediamtx-up mediamtx-down mediamtx-status publishers-up publishers-down publishers-status
+.PHONY: run build up down clean mediamtx-up mediamtx-down mediamtx-status publishers-up publishers-down publishers-status monitoring-up monitoring-down monitoring-restart monitoring-status monitoring-logs
 
 IMAGE  ?= uit_medseg/mlops_thuc:dev
 PYTHON := python3
@@ -10,7 +10,7 @@ MEDIAMTX_SCRIPT := bash scripts/rtsp_sim_mediamtx.sh
 ## Run vision-service (no rebuild — uses existing image)
 ## Auto-removes any stale container with the same name before starting.
 run:
-	@HOST_GPU_ID=$${HOST_GPU_ID:-1}; \
+	@HOST_GPU_ID=$${HOST_GPU_ID:-0}; \
 	CONTAINER_GPU_ID=$${GPU_ID:-0}; \
 	echo ">>> Starting mlops_thuc (host GPU $$HOST_GPU_ID -> container GPU $$CONTAINER_GPU_ID)..."; \
 	docker rm -f uit_medseg_vision 2>/dev/null || true; \
@@ -121,3 +121,35 @@ publishers-down:
 ## Check HLS publishers status
 publishers-status:
 	PROTOCOL=hls bash scripts/rtsp_sim_publishers.sh status
+
+# ── Monitoring (Prometheus + Grafana) ────────────────────────────────────────
+
+## Start Prometheus + Grafana monitoring stack
+monitoring-up:
+	@echo ">>> Starting monitoring stack (Prometheus :9090, Grafana :3000)..."
+	$(COMPOSE) up -d prometheus grafana
+	@echo ">>> Grafana UI  : http://localhost:3000  (admin/admin)"
+	@echo ">>> Prometheus  : http://localhost:9090"
+	@echo ">>> Metrics src : http://localhost:9100/metrics"
+
+## Stop Prometheus + Grafana monitoring stack
+monitoring-down:
+	@echo ">>> Stopping monitoring stack..."
+	$(COMPOSE) stop prometheus grafana
+	$(COMPOSE) rm -f prometheus grafana
+
+## Restart monitoring stack (reload config changes)
+monitoring-restart:
+	$(COMPOSE) restart prometheus grafana
+
+## Show monitoring stack status
+monitoring-status:
+	@echo "=== Monitoring Stack Status ==="
+	@$(COMPOSE) ps prometheus grafana 2>/dev/null || echo "(not running)"
+	@echo ""
+	@echo "=== Metrics endpoint ==="
+	@curl -s --max-time 2 http://localhost:9100/metrics | head -20 || echo "(vision-service not running or metrics disabled)"
+
+## Tail logs from monitoring containers
+monitoring-logs:
+	$(COMPOSE) logs -f --tail=50 prometheus grafana
