@@ -5,24 +5,34 @@ dataset:
 
 # ─── Cấu hình Model ───────────────────────────────────────────────────────────
 model:
-  name: yolov8n.pt  # yolov8n / yolov8s / yolov8m / yolov8l / yolov8x
-
+  #name: yolov8n.pt  # yolov8n / yolov8s / yolov8m / yolov8l / yolov8x
+  name: /mmlab_students/storageStudents/nguyenvd/uit_medseg/CS317_MLOps/dataset/TrainYolo/runs/detect/helmet_training/run_12/weights/best.pt
 # ─── WebDataset Sharding ──────────────────────────────────────────────────────
 sharding:
   output_dir: dataset/shards   # Thư mục chứa các file .tar shards
   shard_size: 1000             # Số ảnh mỗi shard
   extract_limit: 1             # Số shard tối đa cần giải nén mỗi split (set 0 hoặc bỏ trống để giải nén tất cả)
+  split_ratios: [0.8, 0.1, 0.1] # Tỷ lệ chia data (train, val, test) khi pack shard mới
+  # Nếu bạn chỉ muốn train trên một số shard cụ thể, hãy liệt kê tên file ở đây.
+  # Xoá hoặc để trống để lấy toàn bộ.
+  selected_shards:
+    train: ["shard-00052.tar"]
+    val:   ["shard-00008.tar"]
+    test:  ["shard-00015.tar"]
 
 # ─── Hyperparameters huấn luyện ───────────────────────────────────────────────
 train:
-  epochs: 1
+  epochs: 200 
   imgsz: 640
   batch: 64
-  patience: 4
-  device: [4, 5]
+  workers: 8         # Giảm số lượng threads load data (set 0 nếu vẫn bị lỗi ConnectionRefusedError)
+  patience: 10
+  device: [7]
   project: Helmet_Detection_Project
   name: yolov8_binary_class
 
 # ─── MLflow Tracking ──────────────────────────────────────────────────────────
 mlflow:
   tracking_uri: http://localhost:5001
+  registry_name: YOLOv8_Helmet_Model   # Tên model trong MLflow Model Registry
+  deploy_alias: Production              # Alias đánh dấu bản model sẵn sàng deploy

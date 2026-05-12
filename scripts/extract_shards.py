@@ -10,6 +10,7 @@ import glob
 import tarfile
 import argparse
 import time
+import yaml
 from pathlib import Path
 
 
@@ -43,6 +44,24 @@ def extract_shards(shards_base: str, output_base: str, splits: list[str], limit_
             print(f"[SKIP] Không có file .tar nào trong: {split_shards_dir}")
             continue
             
+        # ─── MỚI: Lọc theo danh sách selected_shards (dạng dictionary) ──
+        try:
+            with open("params.yaml", "r") as f:
+                params = yaml.safe_load(f)
+                selected_shards_dict = params.get("sharding", {}).get("selected_shards", {})
+                
+                # Nếu người dùng cấu hình dạng dict: { "train": ["..."], "val": ["..."] }
+                if isinstance(selected_shards_dict, dict) and split in selected_shards_dict:
+                    allowed_files = selected_shards_dict[split]
+                    if allowed_files:  # Nếu danh sách không rỗng
+                        tar_files = [t for t in tar_files if os.path.basename(t) in allowed_files]
+                        if not tar_files:
+                            print(f"[SKIP] Có cấu hình selected_shards cho '{split}' nhưng không file nào khớp.")
+                            continue
+        except Exception:
+            pass # Bỏ qua nếu không đọc được params.yaml
+        # ────────────────────────────────────────────────────────────────
+        
         if limit_shards > 0:
             tar_files = tar_files[:limit_shards]
             

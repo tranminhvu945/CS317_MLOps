@@ -1,7 +1,0 @@
-artifact_location: mlflow-artifacts:/226692046239906336
-creation_time: 1778124681784
-experiment_id: '226692046239906336'
-last_update_time: 1778126944815
-lifecycle_stage: deleted
-name: helmet_training
-tags: {}

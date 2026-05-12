@@ -1,0 +1,23 @@
+artifact_path: /mmlab_students/storageStudents/nguyenvd/uit_medseg/CS317_MLOps/mlartifacts/1/models/m-a4ae5f65670944bf9c9e0c10ba94bd5a/artifacts
+flavors:
+  python_function:
+    artifacts:
+      best.pt:
+        path: artifacts/best.pt
+        uri: runs/detect/Helmet_Detection_Project/yolov8_binary_class/weights/best.pt
+    cloudpickle_version: 3.1.2
+    code: null
+    env:
+      conda: conda.yaml
+      virtualenv: python_env.yaml
+    loader_module: mlflow.pyfunc.model
+    python_model: python_model.pkl
+    python_version: 3.9.5
+    streamable: false
+mlflow_version: 3.1.4
+model_id: m-a4ae5f65670944bf9c9e0c10ba94bd5a
+model_size_bytes: 6223985
+model_uuid: m-a4ae5f65670944bf9c9e0c10ba94bd5a
+prompts: null
+run_id: 1daf71a99c7e40058398a56d592f3cc1
+utc_time_created: '2026-05-11 15:52:51.441798'
