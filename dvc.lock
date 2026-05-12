@@ -1,0 +1,59 @@
+schema: '2.0'
+stages:
+  extract:
+    cmd: python scripts/extract_shards.py --shards-dir dataset/shards 
+      --output-dir dataset/extracted/yolo_helmet_dataset --limit 1
+    deps:
+    - path: dataset/shards
+      hash: md5
+      md5: 657115ef2ca5df9dab5a3b6617e33b92.dir
+      size: 24066232818
+      nfiles: 79
+    - path: scripts/extract_shards.py
+      hash: md5
+      md5: bdd86303ad884881a8f0fdf1637b3a7b
+      size: 4678
+    outs:
+    - path: dataset/extracted/yolo_helmet_dataset
+      hash: md5
+      md5: 4ed9e059b5f6f88a15053dffb0efe882.dir
+      size: 147303573
+      nfiles: 1326
+  train:
+    cmd: python dataset/TrainYolo/train_yolo.py
+    deps:
+    - path: dataset/TrainYolo/train_yolo.py
+      hash: md5
+      md5: a95ff31e47baf164bcb1d4cce20625e5
+      size: 6654
+    - path: dataset/dataset.yaml
+      hash: md5
+      md5: b58be0619991ec97ce0a509b6343eec5
+      size: 580
+    - path: dataset/extracted/yolo_helmet_dataset
+      hash: md5
+      md5: 4ed9e059b5f6f88a15053dffb0efe882.dir
+      size: 147303573
+      nfiles: 1326
+    params:
+      params.yaml:
+        model.name: 
+          /mmlab_students/storageStudents/nguyenvd/uit_medseg/CS317_MLOps/dataset/TrainYolo/runs/detect/helmet_training/run_12/weights/best.pt
+        train.batch: 64
+        train.device:
+        - 7
+        train.epochs: 200
+        train.imgsz: 640
+        train.name: yolov8_binary_class
+        train.patience: 10
+        train.project: Helmet_Detection_Project
+    outs:
+    - path: runs/detect/Helmet_Detection_Project/yolov8_binary_class/results.csv
+      hash: md5
+      md5: e56149b8730e853defd6e5a2329dd779
+      size: 2035
+    - path: 
+        runs/detect/Helmet_Detection_Project/yolov8_binary_class/weights/best.pt
+      hash: md5
+      md5: b2032e0e4a40b7c995fd4a2cda53aa3f
+      size: 6222314

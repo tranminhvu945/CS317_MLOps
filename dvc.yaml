@@ -1,0 +1,35 @@
+stages:
+
+  # ─── Stage 2.5: Giải nén WebDataset Shards ───────────────────────────────
+  extract:
+    cmd: python scripts/extract_shards.py --shards-dir dataset/shards --output-dir dataset/extracted/yolo_helmet_dataset --limit ${sharding.extract_limit}
+    deps:
+      - dataset/shards
+      - scripts/extract_shards.py
+    outs:
+      - dataset/extracted/yolo_helmet_dataset:
+          cache: false
+
+  # ─── Stage 3: Huấn luyện model YOLO ──────────────────────────────────────
+  train:
+    cmd: python dataset/TrainYolo/train_yolo.py
+    deps:
+      - dataset/TrainYolo/train_yolo.py
+      - dataset/extracted/yolo_helmet_dataset
+      - dataset/dataset.yaml
+    params:
+      - params.yaml:
+          - model.name
+          - train.epochs
+          - train.imgsz
+          - train.batch
+          - train.patience
+          - train.device
+          - train.project
+          - train.name
+    outs:
+      - runs/detect/${train.project}/${train.name}/weights/best.pt:
+          cache: true
+    metrics:
+      - runs/detect/${train.project}/${train.name}/results.csv:
+          cache: false

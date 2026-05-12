@@ -33,3 +33,9 @@ numpy>=1.24.0
 
 # MLOps / DVC
 dvc>=3.50.0
+
+# Dataset streaming / sharding
+webdataset>=0.2.86
+
+# Experiment tracking
+mlflow>=2.13.0
