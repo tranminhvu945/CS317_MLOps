@@ -33,7 +33,7 @@ FILES[cam03]="${RTSP_SIM_CAM03_FILE:-${FILES[cam03]}}"
 FILES[cam04]="${RTSP_SIM_CAM04_FILE:-${FILES[cam04]}}"
 
 # Protocol mode: 'rtsp' (default) hoặc 'hls' (push RTMP → MediaMTX → HLS)
-PROTOCOL="${RTSP_SIM_PROTOCOL:-rtsp}"
+PROTOCOL="${PROTOCOL:-rtsp}"
 
 declare -a CAMS=(cam01 cam02 cam03 cam04)
 

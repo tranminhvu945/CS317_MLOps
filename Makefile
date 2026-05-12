@@ -51,9 +51,24 @@ rebuild: down build up
 
 # ── Model export & engine build ───────────────────────────────────────────────
 
-## Export YOLOv8 best.pt → ONNX on the host machine (no Docker needed)
+## Pack raw data into WebDataset shards (e.g. make pack-shards NEW_DATA=dataset/data_new)
+pack-shards:
+	@if [ -z "$(NEW_DATA)" ]; then echo "Lỗi: Vui lòng cung cấp biến NEW_DATA (ví dụ: make pack-shards NEW_DATA=dataset/data_new)"; exit 1; fi
+	@echo ">>> Packing raw data from $(NEW_DATA) into shards..."
+	python3 scripts/pack_shards.py --input-dir $(NEW_DATA)
+	@echo ">>> Done! Now run 'dvc add dataset/shards' and 'make dvc-train'."
+
+## Train model via DVC pipeline (extract → train → register to MLflow Registry)
+dvc-train:
+	@echo ">>> Running DVC pipeline (train stages)..."
+	dvc repro
+	@echo ">>> Done! Check MLflow UI at http://localhost:5001 for registered model."
+
+## Export YOLOv8 best.pt → ONNX (tải tự động từ MLflow Model Registry)
+## Dùng --alias để chỉ định alias khác (mặc định: Production từ params.yaml)
+## Ví dụ: make export-onnx ALIAS=Staging
 export-onnx:
-	python3 scripts/export_yolov8_to_onnx.py
+	python3 scripts/export_onnx.py $(if $(ALIAS),--alias $(ALIAS),)
 
 ## Build TensorRT engine from ONNX (inside container)
 build-engine:

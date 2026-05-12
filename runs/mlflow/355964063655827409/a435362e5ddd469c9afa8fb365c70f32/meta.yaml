@@ -1,0 +1,14 @@
+artifact_uri: /mmlab_students/storageStudents/nguyenvd/uit_medseg/CS317_MLOps/runs/mlflow/355964063655827409/a435362e5ddd469c9afa8fb365c70f32/artifacts
+end_time: 1778122710037
+entry_point_name: ''
+experiment_id: '355964063655827409'
+lifecycle_stage: active
+run_id: a435362e5ddd469c9afa8fb365c70f32
+run_name: yolov8_binary_class
+source_name: ''
+source_type: 4
+source_version: ''
+start_time: 1778122655146
+status: 3
+tags: []
+user_id: uit_medseg

@@ -94,15 +94,20 @@ secrets/
 .DS_Store
 Thumbs.db
 desktop.ini
-
+*.tar
 # ─── Logs ────────────────────────────────────────────────────────────────────
 *.log
 logs/*.mp4
 .nfs*
-
+.dvc/
 data/
+
 
 # ─── Monitoring (Prometheus / Grafana runtime data) ──────────────────────────
 # Keep monitoring/config files, ignore Docker-volume-mounted runtime data
 monitoring/grafana/data/
 monitoring/prometheus/data/
+dataset/yolo_helmet_dataset/
+dataset/TrainYolo/runs/
+dataset/raw/
+dataset/extracted/
