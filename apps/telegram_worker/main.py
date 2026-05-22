@@ -41,6 +41,12 @@ def send_text_to_telegram(
                 data={"chat_id": chat_id, "text": text, "parse_mode": "HTML"},
             )
             t_after = time.time()
+            if response.is_error:
+                logger.error(
+                    f"[TELEGRAM_ERROR] Failed to send text alert: "
+                    f"status_code={response.status_code} "
+                    f"response={response.text.replace(bot_token, '***')}"
+                )
             response.raise_for_status()
             logger.info("Successfully sent text alert to Telegram")
             if event is not None:
@@ -107,6 +113,12 @@ def send_photo_to_telegram(
             with httpx.Client(timeout=15.0) as client:
                 response = client.post(api_url, data=data, files=files)
                 t_after = time.time()
+                if response.is_error:
+                    logger.error(
+                        f"[TELEGRAM_ERROR] Failed to send photo: "
+                        f"status_code={response.status_code} "
+                        f"response={response.text.replace(bot_token, '***')}"
+                    )
                 response.raise_for_status()
                 logger.info("Successfully sent snapshot to Telegram: %s", snapshot_path)
                 if event is not None:
@@ -221,6 +233,7 @@ def _connect_redis() -> redis.Redis:
 
 
 def main() -> None:
+    logger.info("[TELEGRAM_DEBUG] worker started")
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
         logger.error("TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID is missing. Worker will not start properly.")
         raise SystemExit(1)
@@ -230,7 +243,7 @@ def main() -> None:
 
     pubsub = client.pubsub()
     pubsub.subscribe(REDIS_CHANNEL)
-    logger.info("Subscribed to Redis channel: %s", REDIS_CHANNEL)
+    logger.info(f"[TELEGRAM_DEBUG] subscribing channel={REDIS_CHANNEL} host={REDIS_HOST} port={REDIS_PORT}")
 
     for message in pubsub.listen():
         if message["type"] != "message":

@@ -50,6 +50,13 @@ class RtmpOutputChain:
                 f"Failed to get src pad from element '{upstream.get_name()}'."
             )
 
+        # Step 1: Link muxer -> sink FIRST (downstream must be ready before upstream)
+        if not self.muxer.link(self.sink):
+            raise RuntimeError(
+                f"Failed to link {self.muxer.get_name()} -> {self.sink.get_name()}."
+            )
+
+        # Step 2: Request sink pad from muxer, then link upstream -> muxer
         sink_pad = self.muxer.get_compatible_pad(src_pad, None)
         if sink_pad is None:
             sink_pad = self.muxer.request_pad_simple("video")
@@ -64,10 +71,6 @@ class RtmpOutputChain:
         if result != Gst.PadLinkReturn.OK:
             raise RuntimeError(
                 f"Failed to link {upstream.get_name()} src -> {self.muxer.get_name()}, result={result}"
-            )
-        if not self.muxer.link(self.sink):
-            raise RuntimeError(
-                f"Failed to link {self.muxer.get_name()} -> {self.sink.get_name()}."
             )
 
 
@@ -188,11 +191,15 @@ def create_rtmp_output_chain(settings: RootSettings) -> RtmpOutputChain:
     _configure_rtmp_mux_and_sink(settings, muxer=muxer, sink=sink)
 
     logger.info(
-        "RTMP output ready | sink=%s | location=%s | bitrate=%d | iframe_interval=%d",
+        "RTMP output ready | sink=%s | location=%s | bitrate=%d | iframe_interval=%d"
+        " | sink_sync=%s | sink_async=%s | streamable_mux=%s",
         sink_factory,
         settings.rtmp.location,
         settings.rtsp.bitrate,
         settings.rtsp.iframe_interval,
+        settings.rtmp.sink_sync,
+        settings.rtmp.sink_async,
+        settings.rtmp.streamable_mux,
     )
 
     return RtmpOutputChain(

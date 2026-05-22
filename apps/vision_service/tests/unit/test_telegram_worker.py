@@ -38,23 +38,15 @@ def test_extract_snapshot_path_prefers_v1_field(monkeypatch):
     assert worker._extract_snapshot_path(payload) == "/workspace/storage/snapshots/a.jpg"
 
 
-def test_send_photo_fallbacks_to_text_when_file_missing(monkeypatch):
+def test_send_photo_returns_false_when_file_missing(monkeypatch):
     worker = _load_worker_module(monkeypatch)
-    captured: list[str] = []
-
     monkeypatch.setattr(worker.os.path, "exists", lambda _path: False)
 
-    def _fake_send_text(text: str, bot_token: str, chat_id: str):
-        captured.append(f"{text}|{bot_token}|{chat_id}")
-
-    monkeypatch.setattr(worker, "send_text_to_telegram", _fake_send_text)
-
-    worker.send_photo_to_telegram(
+    event = {"event_id": "evt-test"}
+    ret = worker.send_photo_to_telegram(
         "/workspace/storage/snapshots/missing.jpg",
-        "caption",
-        "token",
-        "chat",
+        "dummy-token",
+        "dummy-chat",
+        event=event,
     )
-
-    assert captured
-    assert captured[0].startswith("caption")
+    assert ret is False

@@ -111,7 +111,7 @@ def test_process_event_publishes_snapshot_path_when_source_is_rtmp(monkeypatch):
 
     monkeypatch.setattr(
         publisher,
-        "_grab_snapshot_from_stream",
+        "_grab_snapshot_from_cache",
         lambda camera_id, event_id: f"/workspace/storage/snapshots/violation_{camera_id}_{event_id}.jpg",
     )
     monkeypatch.setattr(publisher, "_save_snapshot_from_probe_frame", lambda **_kwargs: None)
@@ -144,7 +144,7 @@ def test_process_event_fallback_without_snapshot(monkeypatch):
     def _stream_should_not_be_called(*_args, **_kwargs):
         raise AssertionError("stream snapshot must not be used in probe mode")
 
-    monkeypatch.setattr(publisher, "_grab_snapshot_from_stream", _stream_should_not_be_called)
+    monkeypatch.setattr(publisher, "_grab_snapshot_from_cache", _stream_should_not_be_called)
     monkeypatch.setattr(publisher, "_save_snapshot_from_probe_frame", lambda **_kwargs: None)
 
     event = publisher._normalize_event({"event_id": "evt-2", "camera_id": "cam_02"})

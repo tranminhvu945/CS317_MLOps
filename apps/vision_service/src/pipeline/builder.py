@@ -111,6 +111,7 @@ class PipelineBuilder:
         self.snapshot_queue: Gst.Element | None = None
         self.snapshot_convert: Gst.Element | None = None
         self.snapshot_capsfilter: Gst.Element | None = None
+        self.snapshot_fakesink: Gst.Element | None = None
         self.live_branch_queue: Gst.Element | None = None
         self.pre_osd_convert: Gst.Element | None = None
         self.pre_osd_capsfilter: Gst.Element | None = None
@@ -459,7 +460,14 @@ class PipelineBuilder:
                 raise RuntimeError("Failed to link snapshot-queue -> snapshot-convert.")
             if not self.snapshot_convert.link(self.snapshot_capsfilter):
                 raise RuntimeError("Failed to link snapshot-convert -> snapshot-capsfilter.")
-            # snapshot_capsfilter src pad is where InferProbe attaches — no further linking needed
+            
+            # Link snapshot_capsfilter -> fakesink to keep the pipeline flow alive
+            self.snapshot_fakesink = make_element("fakesink", "snapshot-fakesink")
+            self.snapshot_fakesink.set_property("sync", False)
+            self.snapshot_fakesink.set_property("async", False)
+            pipeline.add(self.snapshot_fakesink)
+            if not self.snapshot_capsfilter.link(self.snapshot_fakesink):
+                raise RuntimeError("Failed to link snapshot-capsfilter -> snapshot-fakesink.")
 
             # Live branch: tee.src_1 → live_branch_queue → tiler → pre_osd_convert
             tee_live_pad = self.snapshot_tee.get_request_pad("src_%u")
@@ -475,7 +483,7 @@ class PipelineBuilder:
 
             logger.info(
                 "Pipeline linked: identity -> snapshot-tee -> ("
-                "snapshot branch: snapshot-queue -> snapshot-convert -> snapshot-capsfilter) + "
+                "snapshot branch: snapshot-queue -> snapshot-convert -> snapshot-capsfilter -> snapshot-fakesink) + "
                 "(live branch: live-branch-queue -> tiler -> pre-osd-convert)"
             )
 
@@ -748,27 +756,24 @@ class PipelineBuilder:
             )
 
         # ── InferProbe attachment ─────────────────────────────────────────────────
-        # ưu tiên 1: snapshot_capsfilter (pre-tiler per-source RGBA frame)
-        # ưu tiên 2: tracker/infer output (fallback khi không có snapshot branch)
+        # OSD styling và detection chạy trên main branch (identity trước tee) để tránh race condition trên live stream.
+        # Snapshot extraction chạy trên snapshot branch (snapshot-capsfilter).
         if self.snapshot_capsfilter is not None:
-            probe_element = self.snapshot_capsfilter
+            detection_element = identity
+            snapshot_element = self.snapshot_capsfilter
             probe_reason = (
-                "snapshot-capsfilter RGBA (pre-tiler, per-source "
-                f"{self.settings.pipeline.streammux_width}"
-                f"x{self.settings.pipeline.streammux_height})"
-            )
-            logger.info(
-                "InferProbe will attach to snapshot-capsfilter | "
-                "snapshot is per-source frame (before tiler) | "
-                "streammux=%dx%d",
-                self.settings.pipeline.streammux_width,
-                self.settings.pipeline.streammux_height,
+                f"detection on '{detection_element.get_name()}' (before tee), "
+                f"snapshot on '{snapshot_element.get_name()}' (RGBA)"
             )
         else:
-            probe_element = tracker if tracker is not None else infer
-            probe_reason = "tracker/infer output (no snapshot branch)"
+            detection_element = tracker if tracker is not None else infer
+            snapshot_element = None
+            probe_reason = (
+                f"detection on '{detection_element.get_name() if detection_element else 'None'}' "
+                "(no snapshot branch)"
+            )
 
-        if probe_element is not None:
+        if detection_element is not None:
             if self.settings.telegram.enabled:
                 self.redis_alert_publisher = RedisAlertPublisher(self.settings)
             self.infer_probe = InferProbe(
@@ -776,10 +781,13 @@ class PipelineBuilder:
                 publisher=self.event_publisher,
                 redis_alert_publisher=self.redis_alert_publisher,
             )
-            self.infer_probe.attach(probe_element, pad_name="src")
+            self.infer_probe.attach(
+                detection_element=detection_element,
+                snapshot_element=snapshot_element,
+                pad_name="src",
+            )
             logger.info(
-                "InferProbe tap selected | element=%s | reason=%s",
-                probe_element.get_name(),
+                "InferProbe tap selected | reason=%s",
                 probe_reason,
             )
 
@@ -885,6 +893,7 @@ class PipelineBuilder:
             self.pre_osd_queue = None
             self.pre_encoder_queue = None
             self.live_branch_queue = None
+            self.snapshot_fakesink = None
             self.snapshot_capsfilter = None
             self.snapshot_convert = None
             self.snapshot_queue = None

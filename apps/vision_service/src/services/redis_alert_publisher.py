@@ -269,6 +269,8 @@ class RedisAlertPublisher:
             "timestamp": float(event.get("timestamp") or time.time()),
             "confidence": float(event.get("confidence") or 0.0),
             "frame_num": int(event.get("frame_num") or 0),
+            "class_id": int(event.get("class_id") if event.get("class_id") is not None else 1),
+            "class_name": str(event.get("class_name") or "no_helmet"),
             "bbox": [float(x) for x in bbox[:4]],
             "snapshot_path": "",
         }
@@ -303,6 +305,7 @@ class RedisAlertPublisher:
             return None
 
         if frame is None:
+            logger.warning("[SNAPSHOT_WARNING] snapshot_frame is None")
             return None
 
         try:
@@ -332,23 +335,75 @@ class RedisAlertPublisher:
                     event_id, snap_w, smux_w,
                 )
 
-            # ── Draw bbox ─────────────────────────────────────────────────────────
-            # Bbox trong event là tọa độ streammux space (source_frame_width × source_frame_height).
-            # Snapshot (pre-tiler) cũng là streammux space → scale_x/y ≈ 1.0 khi kích thước khớp.
-            # Nếu snapshot bị resize (hiếm), scale theo tỉ lệ snapshot/source_frame.
+            # ── Draw all bounding boxes if present ──────────────────────────────────
             t_before_bbox = time.time()
-            has_bbox = isinstance(bbox, list) and len(bbox) == 4
+            all_objects = (event or {}).get("all_objects")
+            has_bbox = False
+            
+            # Scale factor based on streammux resolution (coordinates are in streammux space)
+            scale_x = snap_w / smux_w if smux_w > 0 else 1.0
+            scale_y = snap_h / smux_h if smux_h > 0 else 1.0
 
-            source_frame_w = float((event or {}).get("source_frame_width") or smux_w)
-            source_frame_h = float((event or {}).get("source_frame_height") or smux_h)
+            if all_objects is not None and isinstance(all_objects, list):
+                logger.info(
+                    "[DRAW_BBOX_DEBUG] event_id=%s drawing all_objects count=%d | scaling=(%.3f, %.3f)",
+                    event_id, len(all_objects), scale_x, scale_y
+                )
+                for obj in all_objects:
+                    obj_bbox = obj.get("bbox")
+                    if not (isinstance(obj_bbox, list) and len(obj_bbox) == 4):
+                        continue
 
-            if has_bbox:
+                    left_raw, top_raw, width_raw, height_raw = [float(v) for v in obj_bbox]
+                    draw_x = int(left_raw * scale_x)
+                    draw_y = int(top_raw * scale_y)
+                    draw_w = int(width_raw * scale_x)
+                    draw_h = int(height_raw * scale_y)
+
+                    x1 = max(0, draw_x)
+                    y1 = max(0, draw_y)
+                    x2 = min(snap_w - 1, draw_x + draw_w)
+                    y2 = min(snap_h - 1, draw_y + draw_h)
+
+                    obj_class_id = obj.get("class_id")
+                    obj_class_name = obj.get("class_name")
+                    obj_conf = float(obj.get("confidence") or 0.0)
+
+                    # Colors styling: helmet = green, no_helmet = red (BGR)
+                    green = (0, 255, 0)
+                    red = (0, 0, 255)
+                    
+                    if obj_class_name == "helmet" or obj_class_id == 0:
+                        obj_color = green
+                        obj_color_name = "green"
+                    else:
+                        obj_color = red
+                        obj_color_name = "red"
+
+                    logger.info(
+                        "[DRAW_BBOX_DEBUG] event_id=%s object: class_id=%s name=%s color=%s raw_bbox=%s",
+                        event_id, obj_class_id, obj_class_name, obj_color_name, obj_bbox
+                    )
+
+                    if x2 > x1 and y2 > y1:
+                        cv2.rectangle(image, (x1, y1), (x2, y2), obj_color, 3)
+                        has_bbox = True
+                        
+                        label_text = obj_class_name or ("helmet" if obj_class_id == 0 else "no_helmet")
+                        label_str = f"{label_text} {obj_conf:.1%}" if obj_conf > 0 else label_text
+                        cv2.putText(
+                            image,
+                            label_str,
+                            (x1, max(12, y1 - 8)),
+                            cv2.FONT_HERSHEY_SIMPLEX,
+                            0.6,
+                            obj_color,
+                            2,
+                            cv2.LINE_AA,
+                        )
+            elif isinstance(bbox, list) and len(bbox) == 4:
+                # Fallback to single triggering bbox (compatibility mode)
                 left_raw, top_raw, width_raw, height_raw = [float(v) for v in bbox]
-
-                # Scale từ source_frame space → snapshot pixel space
-                scale_x = snap_w / source_frame_w if source_frame_w > 0 else 1.0
-                scale_y = snap_h / source_frame_h if source_frame_h > 0 else 1.0
-
                 draw_x = int(left_raw * scale_x)
                 draw_y = int(top_raw * scale_y)
                 draw_w = int(width_raw * scale_x)
@@ -359,36 +414,46 @@ class RedisAlertPublisher:
                 x2 = min(snap_w - 1, draw_x + draw_w)
                 y2 = min(snap_h - 1, draw_y + draw_h)
 
+                green = (0, 255, 0)
+                red = (0, 0, 255)
+                color = red
+                color_name = "red"
+
+                class_name = (event or {}).get("class_name")
+                class_id = (event or {}).get("class_id")
+
+                if class_name == "helmet" or class_id == 0:
+                    color = green
+                    color_name = "green"
+                else:
+                    color = red
+                    color_name = "red"
+
                 logger.info(
-                    "[DRAW_BBOX_DEBUG] event_id=%s has_bbox=True "
-                    "scale_x=%.3f scale_y=%.3f "
-                    "draw_x=%d draw_y=%d draw_w=%d draw_h=%d "
-                    "snapshot_width=%d snapshot_height=%d "
-                    "source_frame_width=%.0f source_frame_height=%.0f "
-                    "bbox_pixel=[%d,%d,%d,%d]",
-                    event_id, scale_x, scale_y,
-                    draw_x, draw_y, draw_w, draw_h,
-                    snap_w, snap_h, source_frame_w, source_frame_h,
-                    x1, y1, x2, y2,
+                    f"[DRAW_BBOX_DEBUG] event_id={event_id} (fallback) "
+                    f"class_id={class_id} class_name={class_name} "
+                    f"color={color_name} bbox={bbox}"
                 )
 
                 if x2 > x1 and y2 > y1:
-                    cv2.rectangle(image, (x1, y1), (x2, y2), (0, 0, 255), 3)
+                    cv2.rectangle(image, (x1, y1), (x2, y2), color, 3)
+                    has_bbox = True
                     confidence = float((event or {}).get("confidence", 0))
-                    label = f"no_helmet {confidence:.1%}" if confidence > 0 else "no_helmet"
+                    label_text = class_name or ("helmet" if class_id == 0 else "no_helmet")
+                    label = f"{label_text} {confidence:.1%}" if confidence > 0 else label_text
                     cv2.putText(
                         image,
                         label,
                         (x1, max(12, y1 - 8)),
                         cv2.FONT_HERSHEY_SIMPLEX,
                         0.6,
-                        (0, 0, 255),
+                        color,
                         2,
                         cv2.LINE_AA,
                     )
             else:
                 logger.info(
-                    "[DRAW_BBOX_DEBUG] event_id=%s has_bbox=False reason=missing_bbox "
+                    "[DRAW_BBOX_DEBUG] event_id=%s has_bbox=False reason=missing_bbox_and_all_objects "
                     "snapshot_width=%d snapshot_height=%d",
                     event_id, snap_w, snap_h,
                 )
@@ -421,6 +486,7 @@ class RedisAlertPublisher:
             )
 
             if not write_ok:
+                logger.warning("[SNAPSHOT_WARNING] imwrite failed")
                 return None
 
             logger.info(
