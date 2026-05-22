@@ -299,11 +299,13 @@ class PipelineBuilder:
         )
         if self.settings.telegram.enabled and self.settings.telegram.snapshot_source == "probe":
             unified_mem_type = _get_unified_mem_type()
+            # Apply unified memory to streammux và pre_osd_convert (cả tiler và không tiler)
             _set_property_if_exists(streammux, "nvbuf-memory-type", unified_mem_type)
             _set_property_if_exists(self.pre_osd_convert, "nvbuf-memory-type", unified_mem_type)
             logger.info(
-                "Enabled unified nvbuf memory for probe snapshots | nvbuf-memory-type=%d",
+                "Enabled unified nvbuf memory for probe snapshots | nvbuf-memory-type=%d | tiler=%s",
                 unified_mem_type,
+                "enabled" if n_cameras > 1 and self.settings.tiler.enabled else "disabled",
             )
 
         is_live = any(c.stream.type in ("hls", "rtsp") for c in self.settings.cameras)
@@ -629,22 +631,21 @@ class PipelineBuilder:
             self.settings.telegram.enabled
             and self.settings.telegram.snapshot_source == "probe"
             and self.pre_osd_queue is not None
-            and self.tiler is None
         ):
-            # pre-osd-queue is RGBA (via pre_osd_capsfilter), suitable for
-            # get_nvds_buf_surface() snapshot extraction.
+            # Fix 3: pre_osd_capsfilter đã force format=RGBA (xem rtmp_output.py line 178).
+            # pre_osd_queue nhận RGBA buffer từ pre_osd_capsfilter trong mọi trường hợp,
+            # kể cả khi tiler enabled. Attach probe ở đây để get_nvds_buf_surface() hoạt động.
             probe_element = self.pre_osd_queue
-            probe_reason = "pre-osd-queue RGBA output"
-        elif (
-            self.settings.telegram.enabled
-            and self.settings.telegram.snapshot_source == "probe"
-            and self.tiler is not None
-        ):
-            logger.warning(
-                "snapshot_source=probe with tiler enabled: keeping InferProbe on %s; "
-                "probe snapshot extraction may fail if pad format is non-RGBA",
-                probe_element.get_name() if probe_element is not None else "unknown",
-            )
+            if self.tiler is not None:
+                probe_reason = "pre-osd-queue RGBA output (tiler-safe, tiled frame)"
+                logger.info(
+                    "snapshot_source=probe with tiler enabled: attaching InferProbe on "
+                    "pre_osd_queue (RGBA) — snapshot will be full tiled frame %dx%d",
+                    self.settings.tiler.width,
+                    self.settings.tiler.height,
+                )
+            else:
+                probe_reason = "pre-osd-queue RGBA output"
 
         if probe_element is not None:
             if self.settings.telegram.enabled:

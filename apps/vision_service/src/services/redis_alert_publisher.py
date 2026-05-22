@@ -6,7 +6,7 @@ import threading
 import time
 import uuid
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple
 
 from apps.vision_service.src.logger import get_logger
 from apps.vision_service.src.settings import RootSettings
@@ -15,12 +15,132 @@ from apps.vision_service.src.utils.file_utils import ensure_dir
 logger = get_logger(__name__)
 
 
+# ---------------------------------------------------------------------------
+# Persistent Frame Cache
+# ---------------------------------------------------------------------------
+
+class PersistentFrameCache:
+    """
+    Background thread giữ kết nối RTMP/HLS mở liên tục và lưu latest frame.
+
+    Thay thế việc mở cv2.VideoCapture mới cho mỗi event (~4.5s) bằng cách
+    lưu frame mới nhất trong memory và trả về ngay khi có yêu cầu (<1ms).
+    """
+
+    _RECONNECT_DELAY_SEC = 2.0
+    _READ_TIMEOUT_MSEC = 5000
+
+    def __init__(self, url: str, *, name: str = "PersistentFrameCache") -> None:
+        self.url = url
+        self._lock = threading.Lock()
+        self._latest_frame: Any | None = None
+        self._frame_ts: float = 0.0
+        self._stop_event = threading.Event()
+        self._connected = False
+
+        self._thread = threading.Thread(
+            target=self._reader_loop,
+            name=name,
+            daemon=True,
+        )
+        self._thread.start()
+        logger.info("PersistentFrameCache started | url=%s", url)
+
+    def get_frame(self) -> Tuple[Any | None, float]:
+        """
+        Trả về (frame_copy, age_ms).
+        frame_copy là None nếu chưa có frame.
+        """
+        with self._lock:
+            if self._latest_frame is None:
+                return None, 0.0
+            age_ms = (time.time() - self._frame_ts) * 1000
+            return self._latest_frame.copy(), age_ms
+
+    def stop(self) -> None:
+        self._stop_event.set()
+
+    @property
+    def is_connected(self) -> bool:
+        return self._connected
+
+    def _reader_loop(self) -> None:
+        """Vòng lặp đọc frame liên tục, tự động reconnect khi mất kết nối."""
+        try:
+            import cv2  # noqa: PLC0415
+        except ImportError:
+            logger.error("cv2 not installed — PersistentFrameCache disabled")
+            return
+
+        while not self._stop_event.is_set():
+            cap = None
+            try:
+                logger.info("[LATENCY][PERSISTENT_STREAM_CONNECT] url=%s", self.url)
+                cap = cv2.VideoCapture(self.url)
+
+                if hasattr(cv2, "CAP_PROP_BUFFERSIZE"):
+                    cap.set(cv2.CAP_PROP_BUFFERSIZE, 2)
+                if hasattr(cv2, "CAP_PROP_READ_TIMEOUT_MSEC"):
+                    cap.set(cv2.CAP_PROP_READ_TIMEOUT_MSEC, self._READ_TIMEOUT_MSEC)
+
+                if not cap.isOpened():
+                    logger.warning("[LATENCY][PERSISTENT_STREAM_CONNECT_FAILED] url=%s", self.url)
+                    self._connected = False
+                    self._stop_event.wait(self._RECONNECT_DELAY_SEC)
+                    continue
+
+                self._connected = True
+                logger.info("[LATENCY][PERSISTENT_STREAM_CONNECTED] url=%s", self.url)
+
+                consecutive_failures = 0
+                while not self._stop_event.is_set():
+                    ok, frame = cap.read()
+                    if ok and frame is not None:
+                        with self._lock:
+                            self._latest_frame = frame
+                            self._frame_ts = time.time()
+                        consecutive_failures = 0
+                    else:
+                        consecutive_failures += 1
+                        if consecutive_failures >= 10:
+                            logger.warning(
+                                "[LATENCY][PERSISTENT_STREAM_RECONNECT] "
+                                "url=%s failures=%d — reconnecting",
+                                self.url,
+                                consecutive_failures,
+                            )
+                            self._connected = False
+                            break
+
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("[LATENCY][PERSISTENT_STREAM_ERROR] url=%s error=%s", self.url, exc)
+                self._connected = False
+            finally:
+                if cap is not None:
+                    try:
+                        cap.release()
+                    except Exception:
+                        pass
+                self._connected = False
+                if not self._stop_event.is_set():
+                    self._stop_event.wait(self._RECONNECT_DELAY_SEC)
+
+        logger.info("PersistentFrameCache stopped | url=%s", self.url)
+
+
+# ---------------------------------------------------------------------------
+# RedisAlertPublisher
+# ---------------------------------------------------------------------------
+
 class RedisAlertPublisher:
     """
     Async publisher for Telegram alert events.
 
     Pipeline thread only enqueues violation metadata. Snapshot capture + Redis
     publish run in a daemon thread to avoid blocking GStreamer callbacks.
+
+    Mitigation 2: sử dụng PersistentFrameCache thay vì mở cv2.VideoCapture
+    mới cho mỗi event (loại bỏ ~4.5s bottleneck).
     """
 
     def __init__(
@@ -40,6 +160,23 @@ class RedisAlertPublisher:
         self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None
 
+        # ── Persistent frame cache (Fix 2) ──────────────────────────────────
+        self._frame_cache: PersistentFrameCache | None = None
+        if (
+            settings.telegram.enabled
+            and settings.telegram.snapshot_source == "rtmp"
+        ):
+            rtmp_url = settings.telegram.snapshot_rtmp_url.strip()
+            if rtmp_url:
+                self._frame_cache = PersistentFrameCache(
+                    rtmp_url,
+                    name="RTMPFrameCache",
+                )
+            else:
+                logger.warning(
+                    "snapshot_source=rtmp but snapshot_rtmp_url is empty — frame cache disabled"
+                )
+
         if start_thread:
             self._thread = threading.Thread(
                 target=self._publisher_loop,
@@ -49,9 +186,10 @@ class RedisAlertPublisher:
             self._thread.start()
 
         logger.info(
-            "RedisAlertPublisher initialized | topic=%s | snapshot_dir=%s",
+            "RedisAlertPublisher initialized | topic=%s | snapshot_dir=%s | frame_cache=%s",
             self.settings.telegram.redis_topic,
             str(self.snapshot_dir),
+            "enabled" if self._frame_cache is not None else "disabled",
         )
 
     # ------------------------------------------------------------------
@@ -80,9 +218,8 @@ class RedisAlertPublisher:
                     return
                 self._last_event_at[camera_id] = now
 
-        import time as time_lib
         normalized = self._normalize_event(event)
-        normalized["ts_enqueue"] = time_lib.time()
+        normalized["ts_enqueue"] = time.time()
 
         queue_item: Dict[str, Any] = {
             "event": normalized,
@@ -104,8 +241,10 @@ class RedisAlertPublisher:
             )
 
     def stop(self) -> None:
-        """Stop background publisher thread."""
+        """Stop background publisher thread and frame cache."""
         self._stop_event.set()
+        if self._frame_cache is not None:
+            self._frame_cache.stop()
         try:
             self._event_queue.put_nowait(None)
         except queue.Full:
@@ -141,6 +280,62 @@ class RedisAlertPublisher:
     def _build_snapshot_path(self, camera_id: str, event_id: str) -> Path:
         return self.snapshot_dir / f"violation_{camera_id}_{event_id}.jpg"
 
+    def _crop_tiled_frame(
+        self,
+        image: Any,
+        source_id: int,
+    ) -> tuple[Any, tuple[int, int]]:
+        """
+        Crop tiled frame (NxM grid) ra quadrant của camera source_id.
+
+        Layout tiler: source 0 → (row=0,col=0), source 1 → (row=0,col=1), ...
+        Giống cách nvmultistreamtiler sắp xếp: source_id = row * cols + col.
+
+        Returns:
+            (cropped_image, (tile_x0, tile_y0)) — offset của quadrant trong tiled frame.
+        """
+        import math  # noqa: PLC0415
+
+        n_cameras = len(self.settings.cameras)
+        tiler_cfg = self.settings.tiler
+
+        # Tính grid đúng theo cùng logic với tiler.py
+        rows_cfg = tiler_cfg.rows
+        cols_cfg = tiler_cfg.cols
+        if rows_cfg > 0 and cols_cfg > 0:
+            rows, cols = rows_cfg, cols_cfg
+        elif rows_cfg > 0:
+            cols = math.ceil(n_cameras / rows_cfg)
+            rows = rows_cfg
+        elif cols_cfg > 0:
+            rows = math.ceil(n_cameras / cols_cfg)
+            cols = cols_cfg
+        else:
+            cols = math.ceil(math.sqrt(n_cameras))
+            rows = math.ceil(n_cameras / cols)
+
+        tiled_h, tiled_w = image.shape[:2]
+        tile_w = tiled_w // cols
+        tile_h = tiled_h // rows
+
+        # source_id → (row_idx, col_idx)
+        row_idx = source_id // cols
+        col_idx = source_id % cols
+
+        x0 = col_idx * tile_w
+        y0 = row_idx * tile_h
+        x1 = min(x0 + tile_w, tiled_w)
+        y1 = min(y0 + tile_h, tiled_h)
+
+        cropped = image[y0:y1, x0:x1]
+        logger.info(
+            "[TILER_CROP] source_id=%d grid=%dx%d tile=(%d,%d,%d,%d) "
+            "tiled_frame=%dx%d crop=%dx%d",
+            source_id, rows, cols, x0, y0, x1, y1,
+            tiled_w, tiled_h, cropped.shape[1], cropped.shape[0],
+        )
+        return cropped, (x0, y0)
+
     def _save_snapshot_from_probe_frame(
         self,
         *,
@@ -150,7 +345,7 @@ class RedisAlertPublisher:
         bbox: Any | None,
         event: Dict[str, Any] | None = None,
     ) -> str | None:
-        """Save snapshot directly from probe frame (preferred source)."""
+        """Save snapshot directly from probe frame (preferred source — Fix 3)."""
         try:
             import cv2  # noqa: PLC0415
             import numpy as np  # noqa: PLC0415
@@ -166,7 +361,7 @@ class RedisAlertPublisher:
             if image.ndim != 3:
                 return None
 
-            # pyds surface is typically RGBA.
+            # pyds surface is RGBA after Fix 3.
             if image.shape[2] == 4:
                 image = cv2.cvtColor(image, cv2.COLOR_RGBA2BGR)
             elif image.shape[2] == 3:
@@ -174,14 +369,29 @@ class RedisAlertPublisher:
             else:
                 return None
 
-            # Draw bbox for visual context if available.
-            t_before_bbox = time_lib.time()
+            # ── Crop per-camera quadrant khi tiler enabled ────────────────
+            tile_offset_x, tile_offset_y = 0, 0
+            if (
+                event is not None
+                and self.settings.tiler is not None
+                and self.settings.tiler.enabled
+                and len(self.settings.cameras) > 1
+            ):
+                source_id = int(event.get("source_id", -1))
+                if source_id >= 0:
+                    image, (tile_offset_x, tile_offset_y) = self._crop_tiled_frame(
+                        image, source_id
+                    )
+
+            # Draw bbox (tọa độ bbox được offset theo vị trí tile)
+            t_before_bbox = time.time()
             if isinstance(bbox, list) and len(bbox) == 4:
                 left, top, width, height = [int(float(v)) for v in bbox]
-                x1 = max(0, left)
-                y1 = max(0, top)
-                x2 = min(image.shape[1] - 1, left + width)
-                y2 = min(image.shape[0] - 1, top + height)
+                # Trừ tile offset để đưa bbox về hệ tọa độ per-camera
+                x1 = max(0, left - tile_offset_x)
+                y1 = max(0, top - tile_offset_y)
+                x2 = min(image.shape[1] - 1, left - tile_offset_x + width)
+                y2 = min(image.shape[0] - 1, top - tile_offset_y + height)
                 if x2 > x1 and y2 > y1:
                     cv2.rectangle(image, (x1, y1), (x2, y2), (0, 0, 255), 2)
                     cv2.putText(
@@ -194,7 +404,7 @@ class RedisAlertPublisher:
                         2,
                         cv2.LINE_AA,
                     )
-            t_after_bbox = time_lib.time()
+            t_after_bbox = time.time()
             logger.info(
                 f"[LATENCY][DRAW_BBOX] "
                 f"event_id={event_id} "
@@ -202,16 +412,15 @@ class RedisAlertPublisher:
             )
 
             snapshot_path = self._build_snapshot_path(camera_id, event_id)
-            import time as time_lib
-            t_before_imwrite = time_lib.time()
+            t_before_imwrite = time.time()
             if event is not None:
                 event["ts_before_imwrite"] = t_before_imwrite
             write_ok = cv2.imwrite(
                 str(snapshot_path),
                 image,
-                [cv2.IMWRITE_JPEG_QUALITY, 75],
+                [cv2.IMWRITE_JPEG_QUALITY, 85],
             )
-            t_after_imwrite = time_lib.time()
+            t_after_imwrite = time.time()
             if event is not None:
                 event["ts_after_imwrite"] = t_after_imwrite
 
@@ -222,7 +431,7 @@ class RedisAlertPublisher:
                 f"imwrite_ms={(t_after_imwrite - t_before_imwrite) * 1000:.2f} "
                 f"snapshot_path={snapshot_path} "
                 f"image_shape={image.shape} "
-                f"jpeg_quality=75"
+                f"jpeg_quality=85"
             )
 
             if not write_ok:
@@ -236,113 +445,116 @@ class RedisAlertPublisher:
             )
             return str(snapshot_path)
         except Exception as exc:  # noqa: BLE001
-            logger.debug("Probe snapshot save failed: %s", exc)
+            logger.warning("Probe snapshot save failed: %s", exc)
             return None
 
-    def _grab_snapshot_from_stream(self, camera_id: str, event_id: str) -> str | None:
-        """Capture snapshot from RTMP stream, fallback to HLS stream."""
+    def _grab_snapshot_from_cache(self, camera_id: str, event_id: str) -> str | None:
+        """
+        Lấy frame từ PersistentFrameCache (Fix 2).
+        Thay thế _grab_snapshot_from_stream — không mở VideoCapture mới.
+        """
         try:
             import cv2  # noqa: PLC0415
         except ImportError:
-            logger.warning("cv2 not installed — skip snapshot capture")
+            logger.warning("cv2 not installed — skip cache snapshot")
             return None
 
-        urls = [
-            self.settings.telegram.snapshot_rtmp_url.strip(),
-            self.settings.telegram.snapshot_hls_url.strip(),
-        ]
+        if self._frame_cache is None:
+            logger.warning(
+                "[LATENCY][FRAME_CACHE_MISS] "
+                "event_id=%s reason=cache_not_initialized",
+                event_id,
+            )
+            return None
+
+        t_before = time.time()
+        frame, age_ms = self._frame_cache.get_frame()
+        t_after = time.time()
+
+        if frame is None:
+            logger.warning(
+                f"[LATENCY][FRAME_CACHE_MISS] "
+                f"event_id={event_id} "
+                f"reason=no_frame_yet "
+                f"cache_connected={self._frame_cache.is_connected}"
+            )
+            return None
+
+        logger.info(
+            f"[LATENCY][FRAME_CACHE_HIT] "
+            f"event_id={event_id} "
+            f"get_frame_ms={(t_after - t_before) * 1000:.2f}"
+        )
+        logger.info(
+            f"[LATENCY][FRAME_CACHE_AGE_MS] "
+            f"event_id={event_id} "
+            f"age_ms={age_ms:.2f}"
+        )
+
         snapshot_path = self._build_snapshot_path(camera_id, event_id)
+        t_before_imwrite = time.time()
+        write_ok = cv2.imwrite(
+            str(snapshot_path),
+            frame,
+            [cv2.IMWRITE_JPEG_QUALITY, 85],
+        )
+        t_after_imwrite = time.time()
 
-        for url in urls:
-            if not url:
-                continue
+        logger.info(
+            f"[LATENCY][IMWRITE] "
+            f"event_id={event_id} "
+            f"ok={write_ok} "
+            f"imwrite_ms={(t_after_imwrite - t_before_imwrite) * 1000:.2f} "
+            f"snapshot_path={snapshot_path} "
+            f"image_shape={frame.shape} "
+            f"jpeg_quality=85"
+        )
 
-            cap = None
-            t_start = time.time()
-            try:
-                logger.info(f"[LATENCY][STREAM_OPEN_START] event_id={event_id} url={url}")
-                cap = cv2.VideoCapture(url)
-                t_after_open = time.time()
-                is_opened = hasattr(cap, "isOpened") and cap.isOpened()
-                logger.info(
-                    f"[LATENCY][STREAM_OPEN_DONE] "
-                    f"event_id={event_id} "
-                    f"url={url} "
-                    f"is_opened={is_opened} "
-                    f"open_ms={(t_after_open - t_start) * 1000:.2f}"
-                )
-                if not is_opened:
-                    continue
+        if not write_ok:
+            logger.warning(
+                "[LATENCY][FRAME_CACHE_IMWRITE_FAIL] event_id=%s", event_id
+            )
+            return None
 
-                # Keep newest frame only to reduce stale snapshots.
-                if hasattr(cv2, "CAP_PROP_BUFFERSIZE"):
-                    cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-                if hasattr(cv2, "CAP_PROP_OPEN_TIMEOUT_MSEC"):
-                    cap.set(cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, 5000)
-                if hasattr(cv2, "CAP_PROP_READ_TIMEOUT_MSEC"):
-                    cap.set(cv2.CAP_PROP_READ_TIMEOUT_MSEC, 5000)
-
-                t_before_grab = time.time()
-                for _ in range(3):
-                    cap.grab()
-                
-                ok, frame = cap.read()
-                t_after_read = time.time()
-                logger.info(
-                    f"[LATENCY][STREAM_READ_DONE] "
-                    f"event_id={event_id} "
-                    f"ok={ok} "
-                    f"read_ms={(t_after_read - t_before_grab) * 1000:.2f}"
-                )
-                if not ok or frame is None:
-                    continue
-
-                t_before_imwrite = time.time()
-                write_ok = cv2.imwrite(
-                    str(snapshot_path),
-                    frame,
-                    [cv2.IMWRITE_JPEG_QUALITY, 85],
-                )
-                t_after_imwrite = time.time()
-                logger.info(
-                    f"[LATENCY][IMWRITE] "
-                    f"event_id={event_id} "
-                    f"ok={write_ok} "
-                    f"imwrite_ms={(t_after_imwrite - t_before_imwrite) * 1000:.2f} "
-                    f"snapshot_path={snapshot_path} "
-                    f"image_shape={frame.shape} "
-                    f"jpeg_quality=85"
-                )
-                if not write_ok:
-                    continue
-
-                logger.info(
-                    "Snapshot captured | camera=%s | event_id=%s | path=%s",
-                    camera_id,
-                    event_id,
-                    str(snapshot_path),
-                )
-                return str(snapshot_path)
-            except Exception as exc:  # noqa: BLE001
-                logger.warning(
-                    f"[LATENCY][STREAM_CAPTURE_FAILED] "
-                    f"event_id={event_id} "
-                    f"url={url} "
-                    f"error={exc}"
-                )
-            finally:
-                if cap is not None:
-                    try:
-                        cap.release()
-                    except Exception:
-                        pass
-
-        logger.warning(
-            "Snapshot capture failed for event | camera=%s | event_id=%s",
+        logger.info(
+            "Snapshot captured from cache | camera=%s | event_id=%s | path=%s",
             camera_id,
             event_id,
+            str(snapshot_path),
         )
-        return None
+        return str(snapshot_path)
+
+    def _resolve_snapshot(
+        self,
+        *,
+        event: Dict[str, Any],
+        snapshot_frame: Any | None,
+    ) -> str | None:
+        event_id = str(event.get("event_id") or uuid.uuid4())
+        camera_id = str(event.get("camera_id") or "unknown")
+        snapshot_source = self.settings.telegram.snapshot_source
+
+        if snapshot_source == "probe":
+            snapshot_path = self._save_snapshot_from_probe_frame(
+                camera_id=camera_id,
+                event_id=event_id,
+                frame=snapshot_frame,
+                bbox=event.get("bbox"),
+                event=event,
+            )
+            if snapshot_path:
+                return snapshot_path
+
+            logger.warning(
+                "Probe snapshot unavailable; falling back to cache | camera=%s | event_id=%s",
+                camera_id,
+                event_id,
+            )
+            # Fallback to cache when probe fails
+            return self._grab_snapshot_from_cache(camera_id, event_id)
+
+        # snapshot_source == "rtmp" → use persistent cache
+        return self._grab_snapshot_from_cache(camera_id, event_id)
 
     def _connect_redis(self):
         """Connect to Redis with retry until stop signal."""
@@ -376,14 +588,13 @@ class RedisAlertPublisher:
     def _publish_payload(self, client: Any, event: Dict[str, Any]) -> Any | None:
         """Publish payload and reconnect on failure. Returns active client."""
         topic = self.settings.telegram.redis_topic
-        import time as time_lib
-        event["ts_after_redis_publish"] = time_lib.time()
+        event["ts_after_redis_publish"] = time.time()
         payload = json.dumps(event, ensure_ascii=False)
 
-        t_before_redis = time_lib.time()
+        t_before_redis = time.time()
         try:
             client.publish(topic, payload)
-            t_after_redis = time_lib.time()
+            t_after_redis = time.time()
             logger.info(
                 f"[LATENCY][REDIS_PUBLISH] "
                 f"event_id={event.get('event_id')} "
@@ -398,12 +609,12 @@ class RedisAlertPublisher:
         if new_client is None:
             return None
 
-        event["ts_after_redis_publish"] = time_lib.time()
+        event["ts_after_redis_publish"] = time.time()
         payload = json.dumps(event, ensure_ascii=False)
-        t_before_redis = time_lib.time()
+        t_before_redis = time.time()
         try:
             new_client.publish(topic, payload)
-            t_after_redis = time_lib.time()
+            t_after_redis = time.time()
             logger.info(
                 f"[LATENCY][REDIS_PUBLISH] (retry) "
                 f"event_id={event.get('event_id')} "
@@ -414,36 +625,6 @@ class RedisAlertPublisher:
         except Exception as exc:  # noqa: BLE001
             logger.warning("Redis publish retry failed: %s", exc)
             return None
-
-    def _resolve_snapshot(
-        self,
-        *,
-        event: Dict[str, Any],
-        snapshot_frame: Any | None,
-    ) -> str | None:
-        event_id = str(event.get("event_id") or uuid.uuid4())
-        camera_id = str(event.get("camera_id") or "unknown")
-        snapshot_source = self.settings.telegram.snapshot_source
-
-        if snapshot_source == "probe":
-            snapshot_path = self._save_snapshot_from_probe_frame(
-                camera_id=camera_id,
-                event_id=event_id,
-                frame=snapshot_frame,
-                bbox=event.get("bbox"),
-                event=event,
-            )
-            if snapshot_path:
-                return snapshot_path
-
-            logger.warning(
-                "Probe snapshot unavailable; sending text-only alert | camera=%s | event_id=%s",
-                camera_id,
-                event_id,
-            )
-            return None
-
-        return self._grab_snapshot_from_stream(camera_id, event_id)
 
     def _process_event(
         self,
@@ -502,8 +683,7 @@ class RedisAlertPublisher:
             if not isinstance(payload, dict):
                 continue
 
-            import time as time_lib
-            payload["ts_publisher_start"] = time_lib.time()
+            payload["ts_publisher_start"] = time.time()
             logger.info(
                 f"[LATENCY][PUBLISHER_START] "
                 f"event_id={payload.get('event_id')} "

@@ -23,89 +23,94 @@ TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
 
-def send_text_to_telegram(text: str, bot_token: str, chat_id: str, event: dict | None = None) -> None:
-    """Gửi tin nhắn text khi không có ảnh."""
+def send_text_to_telegram(
+    text: str,
+    bot_token: str,
+    chat_id: str,
+    event: dict | None = None,
+    *,
+    label: str = "TEXT_FIRST",
+) -> bool:
+    """Gửi tin nhắn text. Trả về True nếu thành công."""
     api_url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
-    if event is not None:
-        logger.info(f"[LATENCY][SENDING_TYPE] event_id={event.get('event_id')} type=sendMessage")
-    t_before_tg = time.time()
-    if event is not None:
-        event["ts_before_telegram_send"] = t_before_tg
+    t_before = time.time()
     try:
         with httpx.Client(timeout=10.0) as client:
             response = client.post(
                 api_url,
                 data={"chat_id": chat_id, "text": text, "parse_mode": "HTML"},
             )
-            t_after_tg = time.time()
-            if event is not None:
-                event["ts_after_telegram_send"] = t_after_tg
+            t_after = time.time()
             response.raise_for_status()
             logger.info("Successfully sent text alert to Telegram")
             if event is not None:
                 logger.info(
-                    f"[LATENCY][TELEGRAM_SEND_MESSAGE_DONE] "
+                    f"[LATENCY][{label}_SENT] "
                     f"event_id={event.get('event_id')} "
-                    f"telegram_ms={(t_after_tg - t_before_tg) * 1000:.2f} "
+                    f"telegram_ms={(t_after - t_before) * 1000:.2f} "
                     f"status_code={response.status_code} "
-                    f"detect_to_telegram_ms={(t_after_tg - event.get('ts_detect', t_after_tg)) * 1000:.2f}"
+                    f"detect_to_telegram_ms={(t_after - event.get('ts_detect', t_after)) * 1000:.2f}"
                 )
+            return True
     except Exception as exc:  # noqa: BLE001
         logger.error("Failed to send text alert to Telegram: %s", exc)
+        return False
 
 
-def send_photo_to_telegram(snapshot_path: str, caption: str, bot_token: str, chat_id: str, event: dict | None = None) -> None:
-    """Gửi ảnh nếu file tồn tại, fallback về text nếu không có."""
+def send_photo_to_telegram(
+    snapshot_path: str,
+    caption: str,
+    bot_token: str,
+    chat_id: str,
+    event: dict | None = None,
+) -> bool:
+    """Gửi ảnh followup. Trả về True nếu thành công."""
     if not os.path.exists(snapshot_path):
         if event is not None:
             logger.warning(
                 f"[LATENCY][SNAPSHOT_MISSING] "
                 f"event_id={event.get('event_id')} "
-                f"snapshot_path={snapshot_path} "
-                f"fallback=sendMessage"
+                f"snapshot_path={snapshot_path}"
             )
         else:
-            logger.warning("Snapshot not found: %s — sending text alert instead", snapshot_path)
-        send_text_to_telegram(caption, bot_token, chat_id, event=event)
-        return
+            logger.warning("Snapshot not found: %s", snapshot_path)
+        return False
 
     api_url = f"https://api.telegram.org/bot{bot_token}/sendPhoto"
     if event is not None:
-        file_size_kb = os.path.getsize(snapshot_path) / 1024
+        try:
+            file_size_kb = os.path.getsize(snapshot_path) / 1024
+        except OSError:
+            file_size_kb = 0.0
         logger.info(
-            f"[LATENCY][TELEGRAM_SEND_PHOTO_START] "
+            f"[LATENCY][PHOTO_FOLLOWUP_START] "
             f"event_id={event.get('event_id')} "
             f"snapshot_path={snapshot_path} "
             f"file_size_kb={file_size_kb:.2f}"
         )
-        logger.info(f"[LATENCY][SENDING_TYPE] event_id={event.get('event_id')} type=sendPhoto")
 
-    t_before_tg = time.time()
-    if event is not None:
-        event["ts_before_telegram_send"] = t_before_tg
+    t_before = time.time()
     try:
         with open(snapshot_path, "rb") as photo_file:
             files = {"photo": photo_file}
             data = {"chat_id": chat_id, "caption": caption, "parse_mode": "HTML"}
-
-            with httpx.Client(timeout=10.0) as client:
+            with httpx.Client(timeout=15.0) as client:
                 response = client.post(api_url, data=data, files=files)
-                t_after_tg = time.time()
-                if event is not None:
-                    event["ts_after_telegram_send"] = t_after_tg
+                t_after = time.time()
                 response.raise_for_status()
                 logger.info("Successfully sent snapshot to Telegram: %s", snapshot_path)
                 if event is not None:
                     logger.info(
-                        f"[LATENCY][TELEGRAM_SEND_PHOTO_DONE] "
+                        f"[LATENCY][PHOTO_FOLLOWUP_SENT] "
                         f"event_id={event.get('event_id')} "
-                        f"telegram_ms={(t_after_tg - t_before_tg) * 1000:.2f} "
+                        f"telegram_ms={(t_after - t_before) * 1000:.2f} "
                         f"status_code={response.status_code} "
-                        f"detect_to_telegram_ms={(t_after_tg - event.get('ts_detect', t_after_tg)) * 1000:.2f}"
+                        f"detect_to_telegram_ms={(t_after - event.get('ts_detect', t_after)) * 1000:.2f}"
                     )
+                return True
     except Exception as exc:  # noqa: BLE001
-        logger.error("Failed to send photo to Telegram: %s", exc)
-        send_text_to_telegram(caption, bot_token, chat_id, event=event)
+        logger.error("Failed to send photo followup to Telegram: %s", exc)
+        return False
 
 
 def _format_timestamp(raw_ts: object) -> str:
@@ -223,29 +228,44 @@ def main() -> None:
         try:
             payload_str = message["data"]
             payload = json.loads(payload_str)
-            
-            payload["ts_worker_received"] = time.time()
+
+            ts_received = time.time()
+            payload["ts_worker_received"] = ts_received
             logger.info(
                 f"[LATENCY][WORKER_RECEIVED] "
                 f"event_id={payload.get('event_id')} "
-                f"redis_to_worker_ms={(payload['ts_worker_received'] - payload.get('ts_after_redis_publish', payload['ts_worker_received'])) * 1000:.2f} "
-                f"detect_to_worker_ms={(payload['ts_worker_received'] - payload.get('ts_detect', payload['ts_worker_received'])) * 1000:.2f}"
+                f"redis_to_worker_ms={(ts_received - payload.get('ts_after_redis_publish', ts_received)) * 1000:.2f} "
+                f"detect_to_worker_ms={(ts_received - payload.get('ts_detect', ts_received)) * 1000:.2f}"
             )
 
             caption = _build_caption(payload)
             snapshot_path = _extract_snapshot_path(payload)
 
-            DEBUG_ALERT_TEXT_FIRST = os.getenv("DEBUG_ALERT_TEXT_FIRST", "false").lower() == "true"
-            if DEBUG_ALERT_TEXT_FIRST:
-                logger.info("DEBUG_ALERT_TEXT_FIRST is enabled; sending text alert first.")
-                send_text_to_telegram(caption, TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, event=payload)
-                if snapshot_path:
-                    send_photo_to_telegram(snapshot_path, caption, TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, event=payload)
+            # ── Step 1: Luôn gửi text alert ngay lập tức ──────────────────────
+            # Text-first là behavior mặc định để đảm bảo latency < 1.5s
+            send_text_to_telegram(
+                caption,
+                TELEGRAM_BOT_TOKEN,
+                TELEGRAM_CHAT_ID,
+                event=payload,
+                label="TEXT_FIRST",
+            )
+
+            # ── Step 2: Gửi ảnh như follow-up nếu snapshot tồn tại ───────────
+            if snapshot_path:
+                send_photo_to_telegram(
+                    snapshot_path,
+                    caption,
+                    TELEGRAM_BOT_TOKEN,
+                    TELEGRAM_CHAT_ID,
+                    event=payload,
+                )
             else:
-                if snapshot_path:
-                    send_photo_to_telegram(snapshot_path, caption, TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, event=payload)
-                else:
-                    send_text_to_telegram(caption, TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, event=payload)
+                logger.info(
+                    f"[LATENCY][NO_SNAPSHOT] "
+                    f"event_id={payload.get('event_id')} "
+                    f"reason=no_snapshot_path_in_payload"
+                )
 
         except json.JSONDecodeError:
             logger.error("Failed to decode JSON payload: %s", str(message.get("data"))[:100])

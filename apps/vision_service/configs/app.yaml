@@ -93,7 +93,7 @@ metrics:
 
 telegram:
   enabled: true
-  snapshot_source: rtmp
+  snapshot_source: probe
   redis_host: redis
   redis_port: 6379
   redis_topic: helmet_violations

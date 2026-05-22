@@ -456,6 +456,7 @@ class InferProbe:
                             "event_type": "helmet_violation",
                             "event_id": event_id,
                             "camera_id": camera_id,
+                            "source_id": source_id,   # tiler quadrant crop key
                             "track_id": track_id,
                             "timestamp": ts_detect,
                             "confidence": confidence,
