@@ -236,7 +236,22 @@ class InferProbe:
             surface = pyds.get_nvds_buf_surface(hash(gst_buffer), frame_meta.batch_id)
             if surface is None:
                 return None
-            return np.array(surface, copy=True, order="C")
+            frame_arr = np.array(surface, copy=True, order="C")
+            h, w = frame_arr.shape[:2] if frame_arr.ndim >= 2 else (0, 0)
+            logger.info(
+                "[SNAPSHOT_PROBE_DEBUG] "
+                "probe_attach_point=snapshot-capsfilter "
+                "snapshot_shape=%s snapshot_width=%d snapshot_height=%d "
+                "source_frame_width=%d source_frame_height=%d "
+                "is_tiled_frame=False "
+                "batch_id=%d",
+                frame_arr.shape,
+                w, h,
+                int(getattr(frame_meta, 'source_frame_width', 0) or w),
+                int(getattr(frame_meta, 'source_frame_height', 0) or h),
+                int(frame_meta.batch_id),
+            )
+            return frame_arr
         except Exception as exc:  # noqa: BLE001
             if (now - self._last_snapshot_extract_warn_at) >= self._snapshot_extract_warn_interval_sec:
                 logger.warning(
@@ -456,15 +471,38 @@ class InferProbe:
                             "event_type": "helmet_violation",
                             "event_id": event_id,
                             "camera_id": camera_id,
-                            "source_id": source_id,   # tiler quadrant crop key
+                            "source_id": source_id,
                             "track_id": track_id,
                             "timestamp": ts_detect,
                             "confidence": confidence,
                             "frame_num": frame_num,
                             "bbox": [left, top, width, height],
+                            # Metadata for bbox scaling in publisher
+                            "source_frame_width": float(
+                                getattr(frame_meta, 'source_frame_width', 0) or canvas_w
+                            ),
+                            "source_frame_height": float(
+                                getattr(frame_meta, 'source_frame_height', 0) or canvas_h
+                            ),
+                            "batch_id": int(frame_meta.batch_id),
+                            "pad_index": int(getattr(frame_meta, 'pad_index', source_id)),
                         }
                         event["ts_detect"] = ts_detect
                         event["ts_detect_readable"] = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(ts_detect))
+
+                        logger.info(
+                            "[BBOX_DEBUG] "
+                            "event_id=%s camera_id=%s source_id=%d pad_index=%d batch_id=%d "
+                            "frame_num=%d source_frame_width=%.0f source_frame_height=%.0f "
+                            "bbox=[%.1f,%.1f,%.1f,%.1f] confidence=%.3f",
+                            event_id, camera_id, source_id,
+                            int(getattr(frame_meta, 'pad_index', source_id)),
+                            int(frame_meta.batch_id),
+                            frame_num,
+                            float(getattr(frame_meta, 'source_frame_width', 0) or canvas_w),
+                            float(getattr(frame_meta, 'source_frame_height', 0) or canvas_h),
+                            left, top, width, height, confidence,
+                        )
 
                         streak_key = self._build_track_key(
                             camera_id=camera_id,

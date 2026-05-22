@@ -280,62 +280,6 @@ class RedisAlertPublisher:
     def _build_snapshot_path(self, camera_id: str, event_id: str) -> Path:
         return self.snapshot_dir / f"violation_{camera_id}_{event_id}.jpg"
 
-    def _crop_tiled_frame(
-        self,
-        image: Any,
-        source_id: int,
-    ) -> tuple[Any, tuple[int, int]]:
-        """
-        Crop tiled frame (NxM grid) ra quadrant của camera source_id.
-
-        Layout tiler: source 0 → (row=0,col=0), source 1 → (row=0,col=1), ...
-        Giống cách nvmultistreamtiler sắp xếp: source_id = row * cols + col.
-
-        Returns:
-            (cropped_image, (tile_x0, tile_y0)) — offset của quadrant trong tiled frame.
-        """
-        import math  # noqa: PLC0415
-
-        n_cameras = len(self.settings.cameras)
-        tiler_cfg = self.settings.tiler
-
-        # Tính grid đúng theo cùng logic với tiler.py
-        rows_cfg = tiler_cfg.rows
-        cols_cfg = tiler_cfg.cols
-        if rows_cfg > 0 and cols_cfg > 0:
-            rows, cols = rows_cfg, cols_cfg
-        elif rows_cfg > 0:
-            cols = math.ceil(n_cameras / rows_cfg)
-            rows = rows_cfg
-        elif cols_cfg > 0:
-            rows = math.ceil(n_cameras / cols_cfg)
-            cols = cols_cfg
-        else:
-            cols = math.ceil(math.sqrt(n_cameras))
-            rows = math.ceil(n_cameras / cols)
-
-        tiled_h, tiled_w = image.shape[:2]
-        tile_w = tiled_w // cols
-        tile_h = tiled_h // rows
-
-        # source_id → (row_idx, col_idx)
-        row_idx = source_id // cols
-        col_idx = source_id % cols
-
-        x0 = col_idx * tile_w
-        y0 = row_idx * tile_h
-        x1 = min(x0 + tile_w, tiled_w)
-        y1 = min(y0 + tile_h, tiled_h)
-
-        cropped = image[y0:y1, x0:x1]
-        logger.info(
-            "[TILER_CROP] source_id=%d grid=%dx%d tile=(%d,%d,%d,%d) "
-            "tiled_frame=%dx%d crop=%dx%d",
-            source_id, rows, cols, x0, y0, x1, y1,
-            tiled_w, tiled_h, cropped.shape[1], cropped.shape[0],
-        )
-        return cropped, (x0, y0)
-
     def _save_snapshot_from_probe_frame(
         self,
         *,
@@ -345,7 +289,12 @@ class RedisAlertPublisher:
         bbox: Any | None,
         event: Dict[str, Any] | None = None,
     ) -> str | None:
-        """Save snapshot directly from probe frame (preferred source — Fix 3)."""
+        """Save snapshot from pre-tiler per-source probe frame.
+
+        Snapshot branch (snapshot-capsfilter) provides RGBA frame in streammux space
+        (960×544 per-source), before the tiler. No tiled-frame cropping needed.
+        Bbox coordinates are in the same streammux space → scale by (snapshot/source) ratio.
+        """
         try:
             import cv2  # noqa: PLC0415
             import numpy as np  # noqa: PLC0415
@@ -361,7 +310,7 @@ class RedisAlertPublisher:
             if image.ndim != 3:
                 return None
 
-            # pyds surface is RGBA after Fix 3.
+            # RGBA → BGR for cv2.imwrite
             if image.shape[2] == 4:
                 image = cv2.cvtColor(image, cv2.COLOR_RGBA2BGR)
             elif image.shape[2] == 3:
@@ -369,74 +318,85 @@ class RedisAlertPublisher:
             else:
                 return None
 
-            # ── Crop per-camera quadrant khi tiler enabled ────────────────
-            if (
-                event is not None
-                and self.settings.tiler is not None
-                and self.settings.tiler.enabled
-                and len(self.settings.cameras) > 1
-            ):
-                source_id = int(event.get("source_id", -1))
-                if source_id >= 0:
-                    image, _ = self._crop_tiled_frame(
-                        image, source_id
-                    )
+            snap_h, snap_w = image.shape[:2]
 
-            # ── Draw bbox ─────────────────────────────────────────────────
-            # bbox trong event là tọa độ streammux space (streammux_width × streammux_height).
-            # Sau khi tiler scale, mỗi tile có kích thước tile_w × tile_h.
-            # → Cần scale bbox: bbox_tile = bbox_streammux * (tile_w/smux_w, tile_h/smux_h)
-            # → Toạ độ trong ảnh đã crop = bbox sau scale (tile_offset đã bị loại bỏ khi crop)
+            # ── Sanity check: cảnh báo nếu snapshot trông giống tiled frame ──────
+            # Tiled frame thường có width >> streammux_width (vd: 1920 vs 960)
+            smux_w = float(self.settings.pipeline.streammux_width)
+            smux_h = float(self.settings.pipeline.streammux_height)
+            if snap_w > smux_w * 1.3:
+                logger.warning(
+                    "[SNAPSHOT_WARNING] event_id=%s "
+                    "reason='snapshot appears to be tiled output; alert snapshot should be before tiler' "
+                    "snapshot_w=%d smux_w=%.0f",
+                    event_id, snap_w, smux_w,
+                )
+
+            # ── Draw bbox ─────────────────────────────────────────────────────────
+            # Bbox trong event là tọa độ streammux space (source_frame_width × source_frame_height).
+            # Snapshot (pre-tiler) cũng là streammux space → scale_x/y ≈ 1.0 khi kích thước khớp.
+            # Nếu snapshot bị resize (hiếm), scale theo tỉ lệ snapshot/source_frame.
             t_before_bbox = time.time()
             has_bbox = isinstance(bbox, list) and len(bbox) == 4
+
+            source_frame_w = float((event or {}).get("source_frame_width") or smux_w)
+            source_frame_h = float((event or {}).get("source_frame_height") or smux_h)
+
             if has_bbox:
                 left_raw, top_raw, width_raw, height_raw = [float(v) for v in bbox]
 
-                # Scale factors: streammux → tile trong tiled frame
-                smux_w = float(self.settings.pipeline.streammux_width)
-                smux_h = float(self.settings.pipeline.streammux_height)
-                crop_h, crop_w = image.shape[:2]
-                # crop_w/crop_h là kích thước tile (sau khi _crop_tiled_frame đã cắt)
-                scale_x = crop_w / smux_w
-                scale_y = crop_h / smux_h
+                # Scale từ source_frame space → snapshot pixel space
+                scale_x = snap_w / source_frame_w if source_frame_w > 0 else 1.0
+                scale_y = snap_h / source_frame_h if source_frame_h > 0 else 1.0
 
-                x1 = max(0, int(left_raw * scale_x))
-                y1 = max(0, int(top_raw * scale_y))
-                x2 = min(crop_w - 1, int((left_raw + width_raw) * scale_x))
-                y2 = min(crop_h - 1, int((top_raw + height_raw) * scale_y))
+                draw_x = int(left_raw * scale_x)
+                draw_y = int(top_raw * scale_y)
+                draw_w = int(width_raw * scale_x)
+                draw_h = int(height_raw * scale_y)
+
+                x1 = max(0, draw_x)
+                y1 = max(0, draw_y)
+                x2 = min(snap_w - 1, draw_x + draw_w)
+                y2 = min(snap_h - 1, draw_y + draw_h)
 
                 logger.info(
-                    "[LATENCY][BBOX_META] event_id=%s "
-                    "bbox_raw=[%.1f,%.1f,%.1f,%.1f] "
-                    "smux=%dx%d tile=%dx%d scale=(%.3f,%.3f) "
-                    "bbox_scaled=[%d,%d,%d,%d]",
-                    event_id,
-                    left_raw, top_raw, width_raw, height_raw,
-                    int(smux_w), int(smux_h), crop_w, crop_h,
-                    scale_x, scale_y,
+                    "[DRAW_BBOX_DEBUG] event_id=%s has_bbox=True "
+                    "scale_x=%.3f scale_y=%.3f "
+                    "draw_x=%d draw_y=%d draw_w=%d draw_h=%d "
+                    "snapshot_width=%d snapshot_height=%d "
+                    "source_frame_width=%.0f source_frame_height=%.0f "
+                    "bbox_pixel=[%d,%d,%d,%d]",
+                    event_id, scale_x, scale_y,
+                    draw_x, draw_y, draw_w, draw_h,
+                    snap_w, snap_h, source_frame_w, source_frame_h,
                     x1, y1, x2, y2,
                 )
 
                 if x2 > x1 and y2 > y1:
                     cv2.rectangle(image, (x1, y1), (x2, y2), (0, 0, 255), 3)
+                    confidence = float((event or {}).get("confidence", 0))
+                    label = f"no_helmet {confidence:.1%}" if confidence > 0 else "no_helmet"
                     cv2.putText(
                         image,
-                        "no_helmet",
+                        label,
                         (x1, max(12, y1 - 8)),
                         cv2.FONT_HERSHEY_SIMPLEX,
-                        0.7,
+                        0.6,
                         (0, 0, 255),
                         2,
                         cv2.LINE_AA,
                     )
+            else:
+                logger.info(
+                    "[DRAW_BBOX_DEBUG] event_id=%s has_bbox=False reason=missing_bbox "
+                    "snapshot_width=%d snapshot_height=%d",
+                    event_id, snap_w, snap_h,
+                )
 
             t_after_bbox = time.time()
             logger.info(
-                "[LATENCY][DRAW_BBOX] event_id=%s has_bbox=%s draw_ms=%.2f%s",
-                event_id,
-                has_bbox,
-                (t_after_bbox - t_before_bbox) * 1000,
-                "" if has_bbox else " reason=missing_bbox",
+                "[LATENCY][DRAW_BBOX] event_id=%s has_bbox=%s draw_ms=%.2f",
+                event_id, has_bbox, (t_after_bbox - t_before_bbox) * 1000,
             )
 
             snapshot_path = self._build_snapshot_path(camera_id, event_id)
@@ -453,13 +413,11 @@ class RedisAlertPublisher:
                 event["ts_after_imwrite"] = t_after_imwrite
 
             logger.info(
-                f"[LATENCY][IMWRITE] "
-                f"event_id={event_id} "
-                f"ok={write_ok} "
-                f"imwrite_ms={(t_after_imwrite - t_before_imwrite) * 1000:.2f} "
-                f"snapshot_path={snapshot_path} "
-                f"image_shape={image.shape} "
-                f"jpeg_quality=85"
+                "[LATENCY][IMWRITE] event_id=%s ok=%s imwrite_ms=%.2f "
+                "snapshot_path=%s image_shape=%s jpeg_quality=85",
+                event_id, write_ok,
+                (t_after_imwrite - t_before_imwrite) * 1000,
+                snapshot_path, image.shape,
             )
 
             if not write_ok:
@@ -467,14 +425,13 @@ class RedisAlertPublisher:
 
             logger.info(
                 "Snapshot captured from probe | camera=%s | event_id=%s | path=%s",
-                camera_id,
-                event_id,
-                str(snapshot_path),
+                camera_id, event_id, str(snapshot_path),
             )
             return str(snapshot_path)
         except Exception as exc:  # noqa: BLE001
             logger.warning("Probe snapshot save failed: %s", exc)
             return None
+
 
     def _grab_snapshot_from_cache(self, camera_id: str, event_id: str) -> str | None:
         """
