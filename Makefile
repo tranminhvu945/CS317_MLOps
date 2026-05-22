@@ -1,8 +1,9 @@
-.PHONY: run build up down clean mediamtx-up mediamtx-down mediamtx-status publishers-up publishers-down publishers-status monitoring-up monitoring-down monitoring-restart monitoring-status monitoring-logs
+.PHONY: run build up down stack-up stack-down sim-check scale-1 scale-2 scale-4 clean mediamtx-up mediamtx-down mediamtx-status publishers-up publishers-down publishers-status monitoring-up monitoring-down monitoring-restart monitoring-status monitoring-logs
 
 IMAGE  ?= uit_medseg/mlops_thuc:dev
 PYTHON := python3
-COMPOSE := docker compose
+COMPOSE_ENV_FILE ?= apps/vision_service/.env
+COMPOSE := docker compose $(if $(wildcard $(COMPOSE_ENV_FILE)),--env-file $(COMPOSE_ENV_FILE),)
 MEDIAMTX_SCRIPT := bash scripts/rtsp_sim_mediamtx.sh
 
 # ── Run ───────────────────────────────────────────────────────────────────────
@@ -10,7 +11,7 @@ MEDIAMTX_SCRIPT := bash scripts/rtsp_sim_mediamtx.sh
 ## Run vision-service (no rebuild — uses existing image)
 ## Auto-removes any stale container with the same name before starting.
 run:
-	@HOST_GPU_ID=$${HOST_GPU_ID:-0}; \
+	@HOST_GPU_ID=$${HOST_GPU_ID:-7}; \
 	CONTAINER_GPU_ID=$${GPU_ID:-0}; \
 	echo ">>> Starting mlops_thuc (host GPU $$HOST_GPU_ID -> container GPU $$CONTAINER_GPU_ID)..."; \
 	docker rm -f uit_medseg_vision 2>/dev/null || true; \
@@ -18,11 +19,23 @@ run:
 		--name uit_medseg_vision \
 		--gpus device=$$HOST_GPU_ID \
 		--net=host \
+		--add-host mediamtx:127.0.0.1 \
+		--add-host redis:127.0.0.1 \
 		-e NVIDIA_DRIVER_CAPABILITIES=compute,utility,video,graphics \
 		-e APP_ENV=$${APP_ENV:-development} \
 		-e LOG_LEVEL=$${LOG_LEVEL:-INFO} \
 		-e GPU_ID=$$CONTAINER_GPU_ID \
 		-e CONFIG_DIR=/workspace/apps/vision_service/configs \
+		-e RTMP_LOCATION="$${RTMP_LOCATION:-rtmp://127.0.0.1:1935/vision1 live=1}" \
+		-e TELEGRAM_ENABLED=$${TELEGRAM_ENABLED:-true} \
+		-e TELEGRAM_REDIS_HOST=$${TELEGRAM_REDIS_HOST:-127.0.0.1} \
+		-e TELEGRAM_REDIS_PORT=$${TELEGRAM_REDIS_PORT:-6379} \
+		-e TELEGRAM_REDIS_TOPIC=$${TELEGRAM_REDIS_TOPIC:-helmet_violations} \
+		-e TELEGRAM_MIN_CONSEC_NO_HELMET_FRAMES=$${TELEGRAM_MIN_CONSEC_NO_HELMET_FRAMES:-3} \
+		-e TELEGRAM_SNAPSHOT_SOURCE=$${TELEGRAM_SNAPSHOT_SOURCE:-probe} \
+		-e TELEGRAM_SNAPSHOT_DIR=$${TELEGRAM_SNAPSHOT_DIR:-/workspace/storage/snapshots} \
+		-e TELEGRAM_SNAPSHOT_RTMP_URL=$${TELEGRAM_SNAPSHOT_RTMP_URL:-rtmp://127.0.0.1:1935/vision1} \
+		-e TELEGRAM_SNAPSHOT_HLS_URL=$${TELEGRAM_SNAPSHOT_HLS_URL:-http://127.0.0.1:8888/vision1/index.m3u8} \
 		-e PYTHONPATH=/workspace \
 		-v $(PWD):/workspace \
 		$(IMAGE) \
@@ -42,9 +55,56 @@ build:
 up:
 	$(COMPOSE) up -d
 
+## Start alert stack only (redis + mediamtx + vision-service + telegram-worker)
+stack-up:
+	@echo ">>> Cleaning potential name conflicts..."
+	@docker rm -f uit_medseg_vision uit_medseg_telegram_worker 2>/dev/null || true
+	@echo ">>> Stopping standalone MediaMTX simulator (if running)..."
+	@$(MEDIAMTX_SCRIPT) down >/dev/null 2>&1 || true
+	@if [ -f "$(COMPOSE_ENV_FILE)" ]; then set -a; . "$(COMPOSE_ENV_FILE)"; set +a; fi; \
+	if [ -n "$${TELEGRAM_BOT_TOKEN:-}" ] && [ -n "$${TELEGRAM_CHAT_ID:-}" ]; then \
+		echo ">>> Starting stack: redis + mediamtx + vision-service + telegram-worker"; \
+		$(COMPOSE) up -d redis mediamtx vision-service telegram-worker; \
+	else \
+		echo ">>> TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID not set."; \
+		echo ">>> Starting core stack only: redis + mediamtx + vision-service"; \
+		$(COMPOSE) up -d redis mediamtx vision-service; \
+	fi
+
 ## Stop all services
 down:
 	$(COMPOSE) down
+
+## Stop alert stack only
+stack-down:
+	$(COMPOSE) stop vision-service telegram-worker redis mediamtx
+
+## Verify 4 simulated HLS streams are reachable before scaling tests
+sim-check:
+	@echo "=== Simulated HLS endpoints ==="
+	@for cam in cam01 cam02 cam03 cam04; do \
+		url="http://127.0.0.1:8888/$$cam/index.m3u8"; \
+		tmpfile=$$(mktemp); \
+		code=$$(curl -sSL -o "$$tmpfile" -w "%{http_code}" "$$url" || true); \
+		if [ "$$code" = "200" ] && grep -q "^#EXTM3U" "$$tmpfile"; then \
+			echo "[OK] $$cam -> $$url (HLS playlist valid)"; \
+		else \
+			echo "[FAIL] $$cam -> $$url (http=$$code, invalid playlist)"; \
+		fi; \
+		rm -f "$$tmpfile"; \
+	done
+
+## Enable only first 1 camera config (cam_001)
+scale-1:
+	bash scripts/set_camera_count.sh 1
+
+## Enable first 2 camera configs (cam_001..cam_002)
+scale-2:
+	bash scripts/set_camera_count.sh 2
+
+## Enable first 4 camera configs (cam_001..cam_004)
+scale-4:
+	bash scripts/set_camera_count.sh 4
 
 ## Rebuild and restart (no cache)
 rebuild: down build up

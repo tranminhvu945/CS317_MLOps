@@ -150,6 +150,38 @@ make docker-up      # Start all services
 make docker-down   # Stop all services
 ```
 
+### Telegram Alerts (Redis Pub/Sub + snapshot)
+
+`vision-service` publishes violation events to Redis channel `helmet_violations`.
+`telegram-worker` subscribes to this channel and sends photo alerts to Telegram.
+
+1. Configure secrets in `.env`:
+
+```bash
+TELEGRAM_BOT_TOKEN=<your_bot_token>
+TELEGRAM_CHAT_ID=<your_chat_id>
+REDIS_CHANNEL=helmet_violations
+```
+
+2. Start full stack:
+
+```bash
+docker compose up -d redis mediamtx vision-service telegram-worker
+```
+
+3. Validate:
+
+```bash
+# Redis messages
+docker compose logs -f redis
+
+# Worker alert flow
+docker compose logs -f telegram-worker
+
+# Snapshot output
+ls -lah storage/snapshots
+```
+
 ### 5 — Run locally (host Python, for development)
 
 ```bash

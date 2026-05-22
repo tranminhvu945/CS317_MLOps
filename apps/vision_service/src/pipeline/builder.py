@@ -29,6 +29,7 @@ from apps.vision_service.src.probes.stage_latency_probe import (
     StageLatencyProbe,
 )
 from apps.vision_service.src.services.event_publisher import JsonlEventPublisher
+from apps.vision_service.src.services.redis_alert_publisher import RedisAlertPublisher
 from apps.vision_service.src.settings import RootSettings
 from apps.vision_service.src.utils.gst_utils import make_element, request_streammux_sink_pad
 
@@ -39,6 +40,19 @@ logger = get_logger(__name__)
 def _set_property_if_exists(element: Gst.Element, property_name: str, value: object) -> None:
     if element.find_property(property_name) is not None:
         element.set_property(property_name, value)
+
+
+def _get_unified_mem_type() -> int:
+    """
+    DeepStream dGPU unified memory enum for nvbuf-memory-type.
+    Fallback to 3 when pyds enum is unavailable.
+    """
+    try:
+        import pyds  # noqa: PLC0415
+
+        return int(pyds.NVBUF_MEM_CUDA_UNIFIED)
+    except Exception:
+        return 3
 
 
 def _configure_live_queue(queue: Gst.Element, *, silent: bool = True) -> None:
@@ -86,6 +100,7 @@ class PipelineBuilder:
         self.event_publisher = JsonlEventPublisher(
             output_file=self.settings.events.output_file,
         )
+        self.redis_alert_publisher: RedisAlertPublisher | None = None
         self.infer_probe: InferProbe | None = None
         self.stage_latency_probe: StageLatencyProbe | None = None
         self.runtime_metrics_probe: RuntimeMetricsProbe | None = None
@@ -282,6 +297,14 @@ class PipelineBuilder:
             "batched-push-timeout",
             self.settings.pipeline.batched_push_timeout_usec,
         )
+        if self.settings.telegram.enabled and self.settings.telegram.snapshot_source == "probe":
+            unified_mem_type = _get_unified_mem_type()
+            _set_property_if_exists(streammux, "nvbuf-memory-type", unified_mem_type)
+            _set_property_if_exists(self.pre_osd_convert, "nvbuf-memory-type", unified_mem_type)
+            logger.info(
+                "Enabled unified nvbuf memory for probe snapshots | nvbuf-memory-type=%d",
+                unified_mem_type,
+            )
 
         is_live = any(c.stream.type in ("hls", "rtsp") for c in self.settings.cameras)
         streammux.set_property("live-source", 1 if is_live else 0)
@@ -601,12 +624,42 @@ class PipelineBuilder:
             )
 
         probe_element = tracker if tracker is not None else infer
+        probe_reason = "tracker/infer output"
+        if (
+            self.settings.telegram.enabled
+            and self.settings.telegram.snapshot_source == "probe"
+            and self.pre_osd_queue is not None
+            and self.tiler is None
+        ):
+            # pre-osd-queue is RGBA (via pre_osd_capsfilter), suitable for
+            # get_nvds_buf_surface() snapshot extraction.
+            probe_element = self.pre_osd_queue
+            probe_reason = "pre-osd-queue RGBA output"
+        elif (
+            self.settings.telegram.enabled
+            and self.settings.telegram.snapshot_source == "probe"
+            and self.tiler is not None
+        ):
+            logger.warning(
+                "snapshot_source=probe with tiler enabled: keeping InferProbe on %s; "
+                "probe snapshot extraction may fail if pad format is non-RGBA",
+                probe_element.get_name() if probe_element is not None else "unknown",
+            )
+
         if probe_element is not None:
+            if self.settings.telegram.enabled:
+                self.redis_alert_publisher = RedisAlertPublisher(self.settings)
             self.infer_probe = InferProbe(
                 settings=self.settings,
                 publisher=self.event_publisher,
+                redis_alert_publisher=self.redis_alert_publisher,
             )
             self.infer_probe.attach(probe_element, pad_name="src")
+            logger.info(
+                "InferProbe tap selected | element=%s | reason=%s",
+                probe_element.get_name(),
+                probe_reason,
+            )
 
         # RuntimeMetricsProbe (FPS, Queue level, System)
         queue_elements = {
@@ -677,6 +730,10 @@ class PipelineBuilder:
             raise RuntimeError("Failed to set pipeline to PLAYING state.")
 
     def stop(self) -> None:
+        if self.redis_alert_publisher is not None:
+            self.redis_alert_publisher.stop()
+            self.redis_alert_publisher = None
+
         if self.pipeline is None:
             logger.info("Pipeline was never created; nothing to stop.")
             return
