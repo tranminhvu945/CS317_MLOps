@@ -59,12 +59,17 @@ def send_text_to_telegram(
 
 def send_photo_to_telegram(
     snapshot_path: str,
-    caption: str,
     bot_token: str,
     chat_id: str,
     event: dict | None = None,
+    *,
+    followup_caption: str | None = None,
 ) -> bool:
-    """Gửi ảnh followup. Trả về True nếu thành công."""
+    """Gửi ảnh followup KHÔNG kèm full caption để tránh lặp nội dung.
+
+    Khi text-first đã gửi sendMessage với full caption rồi,
+    sendPhoto chỉ gửi ảnh (không caption) hoặc caption ngắn.
+    """
     if not os.path.exists(snapshot_path):
         if event is not None:
             logger.warning(
@@ -86,14 +91,19 @@ def send_photo_to_telegram(
             f"[LATENCY][PHOTO_FOLLOWUP_START] "
             f"event_id={event.get('event_id')} "
             f"snapshot_path={snapshot_path} "
-            f"file_size_kb={file_size_kb:.2f}"
+            f"file_size_kb={file_size_kb:.2f} "
+            f"caption_mode={'none' if followup_caption is None else 'short'}"
         )
 
     t_before = time.time()
     try:
         with open(snapshot_path, "rb") as photo_file:
             files = {"photo": photo_file}
-            data = {"chat_id": chat_id, "caption": caption, "parse_mode": "HTML"}
+            # Không gửi caption để tránh lặp nội dung (text-first đã gửi full caption rồi)
+            data: dict = {"chat_id": chat_id}
+            if followup_caption is not None:
+                data["caption"] = followup_caption
+                data["parse_mode"] = "HTML"
             with httpx.Client(timeout=15.0) as client:
                 response = client.post(api_url, data=data, files=files)
                 t_after = time.time()
@@ -105,7 +115,8 @@ def send_photo_to_telegram(
                         f"event_id={event.get('event_id')} "
                         f"telegram_ms={(t_after - t_before) * 1000:.2f} "
                         f"status_code={response.status_code} "
-                        f"detect_to_telegram_ms={(t_after - event.get('ts_detect', t_after)) * 1000:.2f}"
+                        f"detect_to_telegram_ms={(t_after - event.get('ts_detect', t_after)) * 1000:.2f} "
+                        f"caption_mode={'none' if followup_caption is None else 'short'}"
                     )
                 return True
     except Exception as exc:  # noqa: BLE001
@@ -252,13 +263,14 @@ def main() -> None:
             )
 
             # ── Step 2: Gửi ảnh như follow-up nếu snapshot tồn tại ───────────
+            # Không gửi caption để tránh lặp nội dung — sendMessage đã gửi full caption rồi.
             if snapshot_path:
                 send_photo_to_telegram(
                     snapshot_path,
-                    caption,
                     TELEGRAM_BOT_TOKEN,
                     TELEGRAM_CHAT_ID,
                     event=payload,
+                    followup_caption=None,  # caption_mode=none
                 )
             else:
                 logger.info(

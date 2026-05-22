@@ -370,7 +370,6 @@ class RedisAlertPublisher:
                 return None
 
             # ── Crop per-camera quadrant khi tiler enabled ────────────────
-            tile_offset_x, tile_offset_y = 0, 0
             if (
                 event is not None
                 and self.settings.tiler is not None
@@ -379,36 +378,65 @@ class RedisAlertPublisher:
             ):
                 source_id = int(event.get("source_id", -1))
                 if source_id >= 0:
-                    image, (tile_offset_x, tile_offset_y) = self._crop_tiled_frame(
+                    image, _ = self._crop_tiled_frame(
                         image, source_id
                     )
 
-            # Draw bbox (tọa độ bbox được offset theo vị trí tile)
+            # ── Draw bbox ─────────────────────────────────────────────────
+            # bbox trong event là tọa độ streammux space (streammux_width × streammux_height).
+            # Sau khi tiler scale, mỗi tile có kích thước tile_w × tile_h.
+            # → Cần scale bbox: bbox_tile = bbox_streammux * (tile_w/smux_w, tile_h/smux_h)
+            # → Toạ độ trong ảnh đã crop = bbox sau scale (tile_offset đã bị loại bỏ khi crop)
             t_before_bbox = time.time()
-            if isinstance(bbox, list) and len(bbox) == 4:
-                left, top, width, height = [int(float(v)) for v in bbox]
-                # Trừ tile offset để đưa bbox về hệ tọa độ per-camera
-                x1 = max(0, left - tile_offset_x)
-                y1 = max(0, top - tile_offset_y)
-                x2 = min(image.shape[1] - 1, left - tile_offset_x + width)
-                y2 = min(image.shape[0] - 1, top - tile_offset_y + height)
+            has_bbox = isinstance(bbox, list) and len(bbox) == 4
+            if has_bbox:
+                left_raw, top_raw, width_raw, height_raw = [float(v) for v in bbox]
+
+                # Scale factors: streammux → tile trong tiled frame
+                smux_w = float(self.settings.pipeline.streammux_width)
+                smux_h = float(self.settings.pipeline.streammux_height)
+                crop_h, crop_w = image.shape[:2]
+                # crop_w/crop_h là kích thước tile (sau khi _crop_tiled_frame đã cắt)
+                scale_x = crop_w / smux_w
+                scale_y = crop_h / smux_h
+
+                x1 = max(0, int(left_raw * scale_x))
+                y1 = max(0, int(top_raw * scale_y))
+                x2 = min(crop_w - 1, int((left_raw + width_raw) * scale_x))
+                y2 = min(crop_h - 1, int((top_raw + height_raw) * scale_y))
+
+                logger.info(
+                    "[LATENCY][BBOX_META] event_id=%s "
+                    "bbox_raw=[%.1f,%.1f,%.1f,%.1f] "
+                    "smux=%dx%d tile=%dx%d scale=(%.3f,%.3f) "
+                    "bbox_scaled=[%d,%d,%d,%d]",
+                    event_id,
+                    left_raw, top_raw, width_raw, height_raw,
+                    int(smux_w), int(smux_h), crop_w, crop_h,
+                    scale_x, scale_y,
+                    x1, y1, x2, y2,
+                )
+
                 if x2 > x1 and y2 > y1:
-                    cv2.rectangle(image, (x1, y1), (x2, y2), (0, 0, 255), 2)
+                    cv2.rectangle(image, (x1, y1), (x2, y2), (0, 0, 255), 3)
                     cv2.putText(
                         image,
                         "no_helmet",
-                        (x1, max(0, y1 - 8)),
+                        (x1, max(12, y1 - 8)),
                         cv2.FONT_HERSHEY_SIMPLEX,
-                        0.6,
+                        0.7,
                         (0, 0, 255),
                         2,
                         cv2.LINE_AA,
                     )
+
             t_after_bbox = time.time()
             logger.info(
-                f"[LATENCY][DRAW_BBOX] "
-                f"event_id={event_id} "
-                f"draw_ms={(t_after_bbox - t_before_bbox) * 1000:.2f}"
+                "[LATENCY][DRAW_BBOX] event_id=%s has_bbox=%s draw_ms=%.2f%s",
+                event_id,
+                has_bbox,
+                (t_after_bbox - t_before_bbox) * 1000,
+                "" if has_bbox else " reason=missing_bbox",
             )
 
             snapshot_path = self._build_snapshot_path(camera_id, event_id)
