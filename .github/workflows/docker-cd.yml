@@ -1,4 +1,4 @@
-name: CD - Build and Push Docker Image
+name: CD - Build and Push Lightweight Images
 
 on:
   push:
@@ -12,8 +12,8 @@ permissions:
   packages: write
 
 jobs:
-  build-and-push:
-    name: Build and push Docker image
+  build-telegram-worker:
+    name: Build and push telegram-worker image
     runs-on: ubuntu-latest
 
     steps:
@@ -22,7 +22,7 @@ jobs:
 
       - name: Set lowercase image name
         run: |
-          IMAGE_NAME="ghcr.io/${GITHUB_REPOSITORY}/vision-service"
+          IMAGE_NAME="ghcr.io/${GITHUB_REPOSITORY}/telegram-worker"
           IMAGE_NAME=$(echo "$IMAGE_NAME" | tr '[:upper:]' '[:lower:]')
           echo "IMAGE_NAME=$IMAGE_NAME" >> $GITHUB_ENV
           echo "Image name: $IMAGE_NAME"
@@ -37,11 +37,11 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build and push vision-service image
+      - name: Build and push telegram-worker image
         uses: docker/build-push-action@v6
         with:
           context: .
-          file: ./Dockerfile.ds64_glib
+          file: ./apps/telegram_worker/Dockerfile
           push: true
           tags: |
             ${{ env.IMAGE_NAME }}:latest
