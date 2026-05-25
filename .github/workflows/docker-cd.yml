@@ -4,6 +4,9 @@ on:
   push:
     branches: [main]
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 permissions:
   contents: read
   packages: write
@@ -34,10 +37,11 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build and push image
+      - name: Build and push vision-service image
         uses: docker/build-push-action@v6
         with:
           context: .
+          file: ./Dockerfile.ds64_glib
           push: true
           tags: |
             ${{ env.IMAGE_NAME }}:latest
