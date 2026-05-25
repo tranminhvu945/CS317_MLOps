@@ -40,7 +40,7 @@ jobs:
       - name: Build and push telegram-worker image
         uses: docker/build-push-action@v6
         with:
-          context: .
+          context: ./apps/telegram_worker
           file: ./apps/telegram_worker/Dockerfile
           push: true
           tags: |
