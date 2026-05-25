@@ -11,6 +11,28 @@ from apps.vision_service.src.domain.camera_schema import CameraConfig
 from apps.vision_service.src.utils.file_utils import ensure_dir
 
 
+def _env_bool(name: str, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    value = raw.strip().lower()
+    return value in {"1", "true", "yes", "on"}
+
+
+def _env_int(name: str, default: int) -> int:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return int(raw)
+
+
+def _env_float(name: str, default: float) -> float:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return float(raw)
+
+
 class AppConfig(BaseModel):
     name: str = "helmet-violation-service"
     env: str = "development"
@@ -81,7 +103,7 @@ class RtspConfig(BaseModel):
 
 class RtmpConfig(BaseModel):
     enabled: bool = True
-    location: str = "rtmp://127.0.0.1/live/vision live=1"
+    location: str = "rtmp://127.0.0.1:1935/vision1"
     sink_sync: bool = False
     sink_async: bool = False
     streamable_mux: bool = True
@@ -100,6 +122,19 @@ class TrackerConfig(BaseModel):
 class MetricsConfig(BaseModel):
     enabled: bool = True
     port: int = Field(default=9100, ge=1024, le=65535)
+
+
+class TelegramConfig(BaseModel):
+    enabled: bool = False
+    snapshot_source: Literal["probe", "rtmp"] = "probe"
+    redis_host: str = "redis"
+    redis_port: int = Field(default=6379, ge=1, le=65535)
+    redis_topic: str = "helmet_violations"
+    cooldown_sec: float = Field(default=5.0, ge=0.0)
+    min_consecutive_no_helmet_frames: int = Field(default=3, ge=1)
+    snapshot_dir: str = "/workspace/storage/snapshots"
+    snapshot_rtmp_url: str = "rtmp://mediamtx:1935/vision1"
+    snapshot_hls_url: str = "http://mediamtx:8888/vision1/index.m3u8?cookieCheck=1"
 
 
 class TilerConfig(BaseModel):
@@ -123,6 +158,7 @@ class RootSettings(BaseModel):
     rtsp: RtspConfig
     rtmp: RtmpConfig = Field(default_factory=RtmpConfig)
     metrics: MetricsConfig = Field(default_factory=MetricsConfig)
+    telegram: TelegramConfig = Field(default_factory=TelegramConfig)
     cameras: List[CameraConfig] = Field(default_factory=list)
 
 
@@ -182,6 +218,69 @@ def load_settings() -> RootSettings:
                 ),
                 "gpu_id": int(
                     os.getenv("GPU_ID", raw_app.get("app", {}).get("gpu_id", 0))
+                ),
+            },
+            "rtmp": {
+                **raw_app.get("rtmp", {}),
+                "location": os.getenv(
+                    "RTMP_LOCATION",
+                    raw_app.get("rtmp", {}).get(
+                        "location",
+                        "rtmp://127.0.0.1:1935/vision1",
+                    ),
+                ),
+            },
+            "telegram": {
+                **raw_app.get("telegram", {}),
+                "enabled": _env_bool(
+                    "TELEGRAM_ENABLED",
+                    bool(raw_app.get("telegram", {}).get("enabled", False)),
+                ),
+                "snapshot_source": os.getenv(
+                    "TELEGRAM_SNAPSHOT_SOURCE",
+                    raw_app.get("telegram", {}).get("snapshot_source", "probe"),
+                ),
+                "redis_host": os.getenv(
+                    "TELEGRAM_REDIS_HOST",
+                    raw_app.get("telegram", {}).get("redis_host", "redis"),
+                ),
+                "redis_port": _env_int(
+                    "TELEGRAM_REDIS_PORT",
+                    int(raw_app.get("telegram", {}).get("redis_port", 6379)),
+                ),
+                "redis_topic": os.getenv(
+                    "TELEGRAM_REDIS_TOPIC",
+                    raw_app.get("telegram", {}).get("redis_topic", "helmet_violations"),
+                ),
+                "cooldown_sec": _env_float(
+                    "TELEGRAM_COOLDOWN_SEC",
+                    float(raw_app.get("telegram", {}).get("cooldown_sec", 5.0)),
+                ),
+                "min_consecutive_no_helmet_frames": _env_int(
+                    "TELEGRAM_MIN_CONSEC_NO_HELMET_FRAMES",
+                    int(
+                        raw_app.get("telegram", {}).get(
+                            "min_consecutive_no_helmet_frames", 3
+                        )
+                    ),
+                ),
+                "snapshot_dir": os.getenv(
+                    "TELEGRAM_SNAPSHOT_DIR",
+                    raw_app.get("telegram", {}).get(
+                        "snapshot_dir", "/workspace/storage/snapshots"
+                    ),
+                ),
+                "snapshot_rtmp_url": os.getenv(
+                    "TELEGRAM_SNAPSHOT_RTMP_URL",
+                    raw_app.get("telegram", {}).get(
+                        "snapshot_rtmp_url", "rtmp://mediamtx:1935/vision1"
+                    ),
+                ),
+                "snapshot_hls_url": os.getenv(
+                    "TELEGRAM_SNAPSHOT_HLS_URL",
+                    raw_app.get("telegram", {}).get(
+                        "snapshot_hls_url", "http://mediamtx:8888/vision1/index.m3u8?cookieCheck=1"
+                    ),
                 ),
             },
         }

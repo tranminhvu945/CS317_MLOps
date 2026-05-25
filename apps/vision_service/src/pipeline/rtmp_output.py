@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from urllib.parse import urlparse
+
 import gi
 
 gi.require_version("Gst", "1.0")
@@ -50,6 +52,13 @@ class RtmpOutputChain:
                 f"Failed to get src pad from element '{upstream.get_name()}'."
             )
 
+        # Step 1: Link muxer -> sink FIRST (downstream must be ready before upstream)
+        if not self.muxer.link(self.sink):
+            raise RuntimeError(
+                f"Failed to link {self.muxer.get_name()} -> {self.sink.get_name()}."
+            )
+
+        # Step 2: Request sink pad from muxer, then link upstream -> muxer
         sink_pad = self.muxer.get_compatible_pad(src_pad, None)
         if sink_pad is None:
             sink_pad = self.muxer.request_pad_simple("video")
@@ -64,10 +73,6 @@ class RtmpOutputChain:
         if result != Gst.PadLinkReturn.OK:
             raise RuntimeError(
                 f"Failed to link {upstream.get_name()} src -> {self.muxer.get_name()}, result={result}"
-            )
-        if not self.muxer.link(self.sink):
-            raise RuntimeError(
-                f"Failed to link {self.muxer.get_name()} -> {self.sink.get_name()}."
             )
 
 
@@ -141,6 +146,7 @@ def _resolve_rtmp_sink_factory() -> str:
 def _configure_rtmp_mux_and_sink(
     settings: RootSettings,
     *,
+    sink_factory: str,
     muxer: Gst.Element,
     sink: Gst.Element,
 ) -> None:
@@ -148,10 +154,45 @@ def _configure_rtmp_mux_and_sink(
     if not location:
         raise RuntimeError("RTMP output location is empty. Please set rtmp.location in app.yaml.")
 
+    # `rtmpsink` accepts libRTMP-style suffixes such as `live=1` in the same
+    # location string, while `rtmp2sink` expects a plain URI.
+    if sink_factory == "rtmp2sink":
+        normalized_location = location.split()[0]
+        parsed = urlparse(normalized_location)
+        if parsed.scheme in {"rtmp", "rtmps"} and parsed.hostname:
+            segments = [seg for seg in parsed.path.split("/") if seg]
+            app = "live"
+            stream = "vision1"
+            if len(segments) >= 2:
+                app = segments[0]
+                stream = "/".join(segments[1:])
+            elif len(segments) == 1:
+                stream = segments[0]
+
+            _set_property_if_exists(sink, "scheme", parsed.scheme)
+            _set_property_if_exists(sink, "host", parsed.hostname)
+            _set_property_if_exists(sink, "port", parsed.port or 1935)
+            _set_property_if_exists(sink, "application", app)
+            _set_property_if_exists(sink, "stream", stream)
+            normalized_location = f"{parsed.scheme}://{parsed.hostname}:{parsed.port or 1935}/{app}/{stream}"
+        if normalized_location != location:
+            logger.warning(
+                "RTMP location contains legacy libRTMP options; normalized for rtmp2sink"
+                " | original=%s | normalized=%s",
+                location,
+                normalized_location,
+            )
+        location = normalized_location
+
     _set_property_if_exists(muxer, "streamable", settings.rtmp.streamable_mux)
+    _set_property_if_exists(muxer, "skip-backwards-streams", True)
+    _set_property_if_exists(muxer, "latency", 0)
     sink.set_property("location", location)
     _set_property_if_exists(sink, "sync", settings.rtmp.sink_sync)
     _set_property_if_exists(sink, "async", settings.rtmp.sink_async)
+    _set_property_if_exists(sink, "qos", False)
+    if sink_factory == "rtmp2sink":
+        _set_property_if_exists(sink, "async-connect", False)
 
 
 def create_rtmp_output_chain(settings: RootSettings) -> RtmpOutputChain:
@@ -185,14 +226,23 @@ def create_rtmp_output_chain(settings: RootSettings) -> RtmpOutputChain:
         encoder=encoder,
         parser=parser,
     )
-    _configure_rtmp_mux_and_sink(settings, muxer=muxer, sink=sink)
+    _configure_rtmp_mux_and_sink(
+        settings,
+        sink_factory=sink_factory,
+        muxer=muxer,
+        sink=sink,
+    )
 
     logger.info(
-        "RTMP output ready | sink=%s | location=%s | bitrate=%d | iframe_interval=%d",
+        "RTMP output ready | sink=%s | location=%s | bitrate=%d | iframe_interval=%d"
+        " | sink_sync=%s | sink_async=%s | streamable_mux=%s",
         sink_factory,
         settings.rtmp.location,
         settings.rtsp.bitrate,
         settings.rtsp.iframe_interval,
+        settings.rtmp.sink_sync,
+        settings.rtmp.sink_async,
+        settings.rtmp.streamable_mux,
     )
 
     return RtmpOutputChain(

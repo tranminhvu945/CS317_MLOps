@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
+
 import gi
 
 gi.require_version("Gst", "1.0")
@@ -78,6 +80,27 @@ def _configure_decode_child(child: Gst.Element, drop_frame_interval: int) -> Non
         )
 
 
+def _normalize_hls_uri(uri: str) -> str:
+    """
+    MediaMTX HLS often redirects `/index.m3u8` to `?cookieCheck=1`.
+    Some GStreamer HTTP stacks can fail on this redirect/cookie flow and return 404.
+    To keep ingestion stable, inject cookieCheck=1 directly for plain HTTP HLS URLs.
+    """
+    parsed = urlparse(uri)
+    if parsed.scheme not in {"http", "https"}:
+        return uri
+    if not parsed.path.endswith("/index.m3u8"):
+        return uri
+
+    query = dict(parse_qsl(parsed.query, keep_blank_values=True))
+    if "cookieCheck" in query:
+        return uri
+
+    query["cookieCheck"] = "1"
+    normalized = parsed._replace(query=urlencode(query))
+    return urlunparse(normalized)
+
+
 def create_hls_source_bin(
     index: int,
     uri: str,
@@ -94,8 +117,16 @@ def create_hls_source_bin(
     if source_bin is None:
         raise RuntimeError(f"Failed to create source bin: {bin_name}")
 
+    normalized_uri = _normalize_hls_uri(uri)
+    if normalized_uri != uri:
+        logger.info(
+            "Normalized HLS URI for compatibility | original=%s | normalized=%s",
+            uri,
+            normalized_uri,
+        )
+
     decodebin = _make_element("uridecodebin", f"uri-decode-bin-{index:02d}")
-    decodebin.set_property("uri", uri)
+    decodebin.set_property("uri", normalized_uri)
     _set_property_if_exists(decodebin, "use-buffering", False)
     _set_property_if_exists(decodebin, "buffer-duration", 0)
 
@@ -166,5 +197,5 @@ def create_hls_source_bin(
     if not source_bin.add_pad(ghost_pad):
         raise RuntimeError(f"Failed to add ghost pad to source bin: {bin_name}")
 
-    logger.info("Created source bin: %s | uri=%s", bin_name, uri)
+    logger.info("Created source bin: %s | uri=%s", bin_name, normalized_uri)
     return source_bin

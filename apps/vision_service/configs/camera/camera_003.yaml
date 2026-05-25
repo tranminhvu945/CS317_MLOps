@@ -6,13 +6,13 @@ stream:
   type: hls
   # MediaMTX HLS URL: ffmpeg loop file.mp4 → RTMP → MediaMTX → HLS
   # Khởi động publisher: PROTOCOL=hls bash scripts/rtsp_sim_publishers.sh up
-  uri: "http://127.0.0.1:8888/cam03/index.m3u8"
+  uri: "http://mediamtx:8888/cam03/index.m3u8?cookieCheck=1"
   reconnect_interval_sec: 10
   timeout_sec: 15
   decoder_drop_frame_interval: 0
 
 detection:
-  min_confidence: 0.15
+  min_confidence: 0.5
   roi:
     enabled: false
     polygon: []

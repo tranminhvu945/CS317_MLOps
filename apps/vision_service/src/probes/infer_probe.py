@@ -5,13 +5,6 @@ import uuid
 from collections import Counter
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
-from apps.vision_service.src.pipeline.osd_draw import (
-    apply_safe_style,
-    apply_tracking_label,
-    apply_violation_style,
-    attach_roi_polygon,
-    attach_fps_label,
-)
 
 import gi
 
@@ -20,15 +13,19 @@ from gi.repository import Gst  # noqa: E402
 
 import pyds
 
+import threading
+
 from apps.vision_service.src.logger import get_logger
 from apps.vision_service.src.pipeline.infer import inspect_nvinfer_assets
 from apps.vision_service.src.pipeline.osd_draw import (
     apply_safe_style,
+    attach_fps_label,
+    attach_roi_polygon,
     apply_tracking_label,
     apply_violation_style,
-    attach_roi_polygon,
 )
 from apps.vision_service.src.services.event_publisher import JsonlEventPublisher
+from apps.vision_service.src.services.redis_alert_publisher import RedisAlertPublisher
 from apps.vision_service.src.settings import RootSettings
 from apps.vision_service.src.utils.geometry import (
     bbox_anchor_bottom_center,
@@ -51,9 +48,11 @@ class InferProbe:
         self,
         settings: RootSettings,
         publisher: JsonlEventPublisher,
+        redis_alert_publisher: RedisAlertPublisher | None = None,
     ) -> None:
         self.settings = settings
         self.publisher = publisher
+        self.redis_alert_publisher = redis_alert_publisher
         self.pgie_labels = self._load_labels(settings.infer.config_file)
 
         if 0 not in self.pgie_labels or 1 not in self.pgie_labels:
@@ -61,6 +60,11 @@ class InferProbe:
                 "YOLOv8 helmet model requires labels at index 0 (Safe_Motorcycle) "
                 f"and 1 (Violation_Motorcycle). Found: {self.pgie_labels}"
             )
+
+        # Thread-safe dict for matching main detections with snapshot frames
+        self.pending_violations: Dict[Tuple[str, int], Dict[str, Any]] = {}
+        self._pending_lock = threading.Lock()
+        self.has_snapshot_probe = False
 
         self.started_at = time.monotonic()
         self.last_summary_at = self.started_at
@@ -72,6 +76,26 @@ class InferProbe:
         self.fps_frames: dict[int, int] = {}
         self.current_fps: dict[int, float] = {}
         self.window_probe_callback_ms: List[float] = []
+
+        # Telegram alert anti-noise state:
+        import os
+        min_consec_env = os.environ.get("MIN_CONSECUTIVE_NO_HELMET_FRAMES") or os.environ.get("TELEGRAM_MIN_CONSEC_NO_HELMET_FRAMES")
+        if min_consec_env is not None:
+            self.telegram_min_consecutive_frames = max(1, int(min_consec_env))
+        else:
+            self.telegram_min_consecutive_frames = max(
+                1, int(self.settings.telegram.min_consecutive_no_helmet_frames)
+            )
+        snapshot_src = getattr(self.settings.telegram, "snapshot_source", "")
+        if snapshot_src != "probe":
+            logger.warning("[LATENCY][WARNING] snapshot_source=%s may add RTMP/HLS buffering delay", snapshot_src)
+
+        self._violation_streak_by_track: Dict[str, int] = {}
+        self._alerted_track_keys: set[str] = set()
+        self._last_seen_frame_by_track: Dict[str, int] = {}
+        self._streak_gc_after_frames = 120
+        self._last_snapshot_extract_warn_at = 0.0
+        self._snapshot_extract_warn_interval_sec = 10.0
 
     def _update_fps(self, source_id: int) -> float:
         """Tính FPS riêng biệt cho từng camera (source_id)."""
@@ -93,18 +117,36 @@ class InferProbe:
         return self.current_fps[source_id]
 
 
-    def attach(self, element: Gst.Element, pad_name: str = "src") -> None:
-        pad = element.get_static_pad(pad_name)
-        if pad is None:
+    def attach(
+        self,
+        detection_element: Gst.Element,
+        snapshot_element: Gst.Element | None = None,
+        pad_name: str = "src",
+    ) -> None:
+        det_pad = detection_element.get_static_pad(pad_name)
+        if det_pad is None:
             raise RuntimeError(
-                f"Failed to get pad '{pad_name}' from element '{element.get_name()}'."
+                f"Failed to get pad '{pad_name}' from element '{detection_element.get_name()}'."
             )
-        pad.add_probe(Gst.PadProbeType.BUFFER, self._on_buffer_probe, None)
+        det_pad.add_probe(Gst.PadProbeType.BUFFER, self._on_buffer_probe, None)
         logger.info(
-            "InferProbe attached to element='%s', pad='%s'",
-            element.get_name(),
+            "InferProbe (detection/styling) attached to element='%s', pad='%s'",
+            detection_element.get_name(),
             pad_name,
         )
+
+        if snapshot_element is not None:
+            self.has_snapshot_probe = True
+            snap_pad = snapshot_element.get_static_pad("src")
+            if snap_pad is None:
+                raise RuntimeError(
+                    f"Failed to get src pad from element '{snapshot_element.get_name()}'."
+                )
+            snap_pad.add_probe(Gst.PadProbeType.BUFFER, self._on_snapshot_probe, None)
+            logger.info(
+                "InferProbe (snapshot) attached to element='%s', pad='src'",
+                snapshot_element.get_name(),
+            )
 
     def _load_labels(self, infer_config_file: str) -> Dict[int, str]:
         assets = inspect_nvinfer_assets(infer_config_file)
@@ -197,12 +239,203 @@ class InferProbe:
             return self.settings.cameras[source_id].camera_id
         return f"source_{source_id}"
 
+    def _extract_probe_snapshot_frame(
+        self,
+        gst_buffer: Gst.Buffer,
+        frame_meta: Any,
+        pad_caps: str = "Unknown",
+    ) -> Any | None:
+        """
+        Extract a copy of current frame surface from pipeline buffer.
+        Returned frame is used by RedisAlertPublisher thread to write snapshot.
+        """
+        now = time.monotonic()
+        try:
+            import numpy as np  # noqa: PLC0415
+        except ImportError:
+            if (now - self._last_snapshot_extract_warn_at) >= self._snapshot_extract_warn_interval_sec:
+                logger.warning("numpy not installed — cannot extract probe snapshot frame")
+                self._last_snapshot_extract_warn_at = now
+            return None
+
+        try:
+            surface = pyds.get_nvds_buf_surface(hash(gst_buffer), frame_meta.batch_id)
+            if surface is None:
+                logger.warning(
+                    "[SNAPSHOT_PROBE_DEBUG] get_nvds_buf_surface returned None | "
+                    "batch_id=%d | frame_num=%d | pad_caps=%s",
+                    frame_meta.batch_id, int(frame_meta.frame_num), pad_caps
+                )
+                return None
+            frame_arr = np.array(surface, copy=True, order="C")
+            h, w = frame_arr.shape[:2] if frame_arr.ndim >= 2 else (0, 0)
+            logger.info(
+                "[SNAPSHOT_PROBE_DEBUG] "
+                "probe_attach_point=snapshot-capsfilter "
+                "snapshot_shape=%s snapshot_width=%d snapshot_height=%d "
+                "source_frame_width=%d source_frame_height=%d "
+                "is_tiled_frame=False "
+                "batch_id=%d",
+                frame_arr.shape,
+                w, h,
+                int(getattr(frame_meta, 'source_frame_width', 0) or w),
+                int(getattr(frame_meta, 'source_frame_height', 0) or h),
+                int(frame_meta.batch_id),
+            )
+            return frame_arr
+        except Exception as exc:  # noqa: BLE001
+            if (now - self._last_snapshot_extract_warn_at) >= self._snapshot_extract_warn_interval_sec:
+                logger.warning(
+                    "Failed to extract probe snapshot frame (likely non-RGBA pad format): %s",
+                    exc,
+                )
+                self._last_snapshot_extract_warn_at = now
+            return None
+
+    def _build_track_key(
+        self,
+        camera_id: str,
+        track_id: Optional[int],
+        left: float,
+        top: float,
+        width: float,
+        height: float,
+    ) -> str:
+        if track_id is not None:
+            return f"{camera_id}|track:{track_id}"
+
+        # Fallback for anonymous objects (rare when tracker is enabled):
+        # use quantized bbox center to keep a stable key across nearby frames.
+        center_x = left + (width * 0.5)
+        center_y = top + (height * 0.5)
+        qx = int(center_x / 32.0)
+        qy = int(center_y / 32.0)
+        return f"{camera_id}|anon:{qx}:{qy}"
+
+    def _cleanup_stale_track_state(self, camera_id: str, frame_num: int) -> None:
+        prefix = f"{camera_id}|"
+        stale_keys: List[str] = []
+        for key, last_seen in self._last_seen_frame_by_track.items():
+            if not key.startswith(prefix):
+                continue
+            if (frame_num - last_seen) > self._streak_gc_after_frames:
+                stale_keys.append(key)
+
+        for key in stale_keys:
+            self._last_seen_frame_by_track.pop(key, None)
+            self._violation_streak_by_track.pop(key, None)
+            self._alerted_track_keys.discard(key)
+
+    def _should_emit_telegram_alert(
+        self,
+        *,
+        camera_id: str,
+        frame_num: int,
+        class_id: int,
+        track_id: Optional[int],
+        left: float,
+        top: float,
+        width: float,
+        height: float,
+    ) -> bool:
+        if self.redis_alert_publisher is None:
+            return False
+
+        key = self._build_track_key(
+            camera_id=camera_id,
+            track_id=track_id,
+            left=left,
+            top=top,
+            width=width,
+            height=height,
+        )
+        self._last_seen_frame_by_track[key] = frame_num
+
+        # Any non-violation on this track resets alert state.
+        if class_id != 1:
+            self._violation_streak_by_track[key] = 0
+            self._alerted_track_keys.discard(key)
+            return False
+
+        streak = self._violation_streak_by_track.get(key, 0) + 1
+        self._violation_streak_by_track[key] = streak
+
+        if streak < self.telegram_min_consecutive_frames:
+            return False
+        if key in self._alerted_track_keys:
+            return False
+
+        self._alerted_track_keys.add(key)
+        return True
+
+    def _on_snapshot_probe(
+        self,
+        _pad: Gst.Pad,
+        info: Gst.PadProbeInfo,
+        _user_data: object,
+    ) -> Gst.PadProbeReturn:
+        gst_buffer = info.get_buffer()
+        if gst_buffer is None:
+            return Gst.PadProbeReturn.OK
+
+        batch_meta = pyds.gst_buffer_get_nvds_batch_meta(hash(gst_buffer))
+        if batch_meta is None:
+            return Gst.PadProbeReturn.OK
+
+        l_frame = batch_meta.frame_meta_list
+        while l_frame is not None:
+            try:
+                frame_meta = pyds.NvDsFrameMeta.cast(l_frame.data)
+            except StopIteration:
+                break
+
+            camera_id = self._resolve_camera_id(frame_meta)
+            frame_num = int(frame_meta.frame_num)
+            key = (camera_id, frame_num)
+
+            with self._pending_lock:
+                event = self.pending_violations.pop(key, None)
+
+            if event is not None:
+                # Extract the snapshot frame (per-camera RGBA frame before tiler)
+                pad_caps = _pad.get_current_caps()
+                caps_str = pad_caps.to_string() if pad_caps else "None"
+                snapshot_frame = self._extract_probe_snapshot_frame(
+                    gst_buffer,
+                    frame_meta,
+                    pad_caps=caps_str,
+                )
+                
+                # Enqueue the violation to redis_alert_publisher
+                if self.redis_alert_publisher is not None:
+                    t_before_enqueue = time.time()
+                    event["ts_before_enqueue"] = t_before_enqueue
+                    self.redis_alert_publisher.enqueue_violation(
+                        event,
+                        snapshot_frame=snapshot_frame,
+                    )
+                    t_after_enqueue = time.time()
+                    event["ts_after_enqueue"] = t_after_enqueue
+                    logger.info(
+                        f"[LATENCY][ENQUEUE_CALL] "
+                        f"event_id={event.get('event_id')} "
+                        f"enqueue_cost_ms={(t_after_enqueue - t_before_enqueue) * 1000:.2f}"
+                    )
+
+            try:
+                l_frame = l_frame.next
+            except StopIteration:
+                break
+
+        return Gst.PadProbeReturn.OK
+
     def _on_buffer_probe(
         self,
         _pad: Gst.Pad,
         info: Gst.PadProbeInfo,
         _user_data: object,
     ) -> Gst.PadProbeReturn:
+        logger.info("[PROBE_DEBUG] snapshot probe callback called")
         callback_started_ns = time.perf_counter_ns()
         gst_buffer = info.get_buffer()
         if gst_buffer is None:
@@ -211,6 +444,7 @@ class InferProbe:
 
         batch_meta = pyds.gst_buffer_get_nvds_batch_meta(hash(gst_buffer))
         if batch_meta is None:
+            logger.info("[PROBE_DEBUG] no NvDsBatchMeta found")
             self._record_callback_time(callback_started_ns)
             return Gst.PadProbeReturn.OK
 
@@ -225,11 +459,39 @@ class InferProbe:
                 break
 
             camera_id = self._resolve_camera_id(frame_meta)
+            frame_num = int(frame_meta.frame_num)
+            self._cleanup_stale_track_state(camera_id=camera_id, frame_num=frame_num)
             source_id = int(frame_meta.source_id)
             fps = self._update_fps(source_id)
             if self.settings.visualization.enabled:
                 attach_fps_label(batch_meta, frame_meta, fps)
 
+            # Clear OSD params of all objects in this frame first
+            curr_obj = frame_meta.obj_meta_list
+            while curr_obj is not None:
+                try:
+                    obj_meta = pyds.NvDsObjectMeta.cast(curr_obj.data)
+                except StopIteration:
+                    break
+                rect_params = obj_meta.rect_params
+                text_params = obj_meta.text_params
+                rect_params.border_width = 0
+                if hasattr(rect_params, "has_bg_color"):
+                    rect_params.has_bg_color = 0
+                text_params.display_text = ""
+                if hasattr(text_params, "set_bg_clr"):
+                    text_params.set_bg_clr = 0
+                curr_obj = curr_obj.next
+
+            # Count objects in this frame for debugging
+            num_objects = 0
+            curr_obj = frame_meta.obj_meta_list
+            while curr_obj is not None:
+                num_objects += 1
+                curr_obj = curr_obj.next
+            logger.info(
+                f"[PROBE_DEBUG] source_id={source_id} frame_num={frame_num} num_objects={num_objects}"
+            )
 
             source_w, source_h = self._get_frame_resolution(frame_meta)
 
@@ -239,24 +501,16 @@ class InferProbe:
             min_confidence = self._get_min_confidence(camera_id)
             window_counts: Counter[str] = Counter()
 
+            all_objects = []
+            has_violation_alert = False
+            triggering_event = None
+
             l_obj = frame_meta.obj_meta_list
             while l_obj is not None:
                 try:
                     obj_meta = pyds.NvDsObjectMeta.cast(l_obj.data)
                 except StopIteration:
                     break
-
-                rect_params = obj_meta.rect_params
-                text_params = obj_meta.text_params
-
-                # Always clear previous OSD state before filtering object metadata.
-                rect_params.border_width = 0
-                if hasattr(rect_params, "has_bg_color"):
-                    rect_params.has_bg_color = 0
-
-                text_params.display_text = ""
-                if hasattr(text_params, "set_bg_clr"):
-                    text_params.set_bg_clr = 0
 
                 unique_id = int(obj_meta.unique_component_id)
                 if unique_id != PGIE_UNIQUE_ID:
@@ -289,32 +543,164 @@ class InferProbe:
                     l_obj = l_obj.next
                     continue
 
+                class_name = "no_helmet" if class_id == 1 else "helmet"
                 track_str = f" #{track_id}" if track_id is not None else ""
+                label = f"{class_name}{track_str}"
 
+                # Append to all_objects list
+                all_objects.append({
+                    "class_id": class_id,
+                    "class_name": class_name,
+                    "confidence": confidence,
+                    "bbox": [left, top, width, height],
+                    "track_id": track_id,
+                })
+
+                # Style the OSD bounding boxes and text
                 if class_id == 1:
-                    label = f"{NO_HELMET_LABEL}{track_str}"
                     apply_violation_style(obj_meta)
                     apply_tracking_label(obj_meta, NO_HELMET_LABEL, track_id)
 
+                    # Streak and event logic
+                    ts_detect = time.time()
+                    ts_ms = int(ts_detect * 1000)
+                    event_id = f"violation_{camera_id}_{track_id if track_id is not None else 'anon'}_{ts_ms}"
+
+                    event_payload = {
+                        "event_id": event_id,
+                        "camera_id": camera_id,
+                        "track_id": track_id,
+                        "class_id": class_id,
+                        "class_name": class_name,
+                        "confidence": confidence,
+                        "frame_num": frame_num,
+                        "bbox": [left, top, width, height],
+                    }
                     self.publisher.publish(
                         event_type="helmet_violation",
-                        payload={
-                            "event_id": str(uuid.uuid4()),
-                            "camera_id": camera_id,
-                            "track_id": track_id,
-                            "confidence": confidence,
-                            "bbox": [left, top, width, height],
-                        },
+                        payload=event_payload,
                     )
+
+                    if self._should_emit_telegram_alert(
+                        camera_id=camera_id,
+                        frame_num=frame_num,
+                        class_id=class_id,
+                        track_id=track_id,
+                        left=left,
+                        top=top,
+                        width=width,
+                        height=height,
+                    ):
+                        has_violation_alert = True
+                        if triggering_event is None:
+                            triggering_event = {
+                                "event_type": "helmet_violation",
+                                "event_id": event_id,
+                                "camera_id": camera_id,
+                                "source_id": source_id,
+                                "track_id": track_id,
+                                "class_id": class_id,
+                                "class_name": class_name,
+                                "timestamp": ts_detect,
+                                "confidence": confidence,
+                                "frame_num": frame_num,
+                                "bbox": [left, top, width, height],
+                                "source_frame_width": float(getattr(frame_meta, 'source_frame_width', 0) or canvas_w),
+                                "source_frame_height": float(getattr(frame_meta, 'source_frame_height', 0) or canvas_h),
+                                "batch_id": int(frame_meta.batch_id),
+                                "pad_index": int(getattr(frame_meta, 'pad_index', source_id)),
+                            }
+                            triggering_event["ts_detect"] = ts_detect
+                            triggering_event["ts_detect_readable"] = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(ts_detect))
+
+                            logger.info(
+                                "[BBOX_DEBUG] "
+                                "event_id=%s camera_id=%s source_id=%d pad_index=%d batch_id=%d "
+                                "frame_num=%d source_frame_width=%.0f source_frame_height=%.0f "
+                                "bbox=[%.1f,%.1f,%.1f,%.1f] confidence=%.3f",
+                                event_id, camera_id, source_id,
+                                int(getattr(frame_meta, 'pad_index', source_id)),
+                                int(frame_meta.batch_id),
+                                frame_num,
+                                float(getattr(frame_meta, 'source_frame_width', 0) or canvas_w),
+                                float(getattr(frame_meta, 'source_frame_height', 0) or canvas_h),
+                                left, top, width, height, confidence,
+                            )
+
+                            streak_key = self._build_track_key(
+                                camera_id=camera_id,
+                                track_id=track_id,
+                                left=left,
+                                top=top,
+                                width=width,
+                                height=height,
+                            )
+                            current_streak = self._violation_streak_by_track.get(streak_key, 0)
+                            logger.info(
+                                f"[LATENCY][DETECT] "
+                                f"event_id={event_id} "
+                                f"camera_id={camera_id} "
+                                f"track_id={track_id} "
+                                f"frame_num={frame_num} "
+                                f"ts_detect={ts_detect:.6f} "
+                                f"streak={current_streak} "
+                                f"min_consec={self.telegram_min_consecutive_frames}"
+                            )
+                            
+                            min_frames = self.telegram_min_consecutive_frames
+                            fps_val = fps if fps > 0 else 30.0
+                            estimated_delay = min_frames / fps_val
+                            logger.info(
+                                f"[LATENCY][STREAK_FILTER] min_frames={min_frames} fps={fps_val:.2f} estimated_delay_sec={estimated_delay:.2f}"
+                            )
                 else:
-                    label = f"{SAFE_OSD_LABEL}{track_str}"
                     apply_safe_style(obj_meta)
                     apply_tracking_label(obj_meta, SAFE_OSD_LABEL, track_id)
+                    self._should_emit_telegram_alert(
+                        camera_id=camera_id,
+                        frame_num=frame_num,
+                        class_id=class_id,
+                        track_id=track_id,
+                        left=left,
+                        top=top,
+                        width=width,
+                        height=height,
+                    )
 
                 window_counts[label] += 1
                 self.window_objects += 1
-
                 l_obj = l_obj.next
+
+            # If violation was triggered, prepare the final event
+            if has_violation_alert and triggering_event is not None:
+                triggering_event["all_objects"] = all_objects
+
+                if self.has_snapshot_probe:
+                    key = (camera_id, frame_num)
+                    with self._pending_lock:
+                        self.pending_violations[key] = triggering_event
+                else:
+                    if self.redis_alert_publisher is not None:
+                        t_before_enqueue = time.time()
+                        triggering_event["ts_before_enqueue"] = t_before_enqueue
+                        self.redis_alert_publisher.enqueue_violation(
+                            triggering_event,
+                            snapshot_frame=None,
+                        )
+                        t_after_enqueue = time.time()
+                        triggering_event["ts_after_enqueue"] = t_after_enqueue
+                        logger.info(
+                            f"[LATENCY][ENQUEUE_CALL] "
+                            f"event_id={triggering_event.get('event_id')} "
+                            f"enqueue_cost_ms={(t_after_enqueue - t_before_enqueue) * 1000:.2f}"
+                        )
+
+            # Periodically clean up stale pending violations (older than 10 seconds)
+            now_time = time.time()
+            with self._pending_lock:
+                stale_keys = [k for k, ev in self.pending_violations.items() if (now_time - ev.get("timestamp", 0)) > 10.0]
+                for k in stale_keys:
+                    self.pending_violations.pop(k, None)
 
             self.window_frames += 1
             self.window_counts_by_label.update(window_counts)

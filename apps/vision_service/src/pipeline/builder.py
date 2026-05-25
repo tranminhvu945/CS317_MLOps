@@ -29,6 +29,7 @@ from apps.vision_service.src.probes.stage_latency_probe import (
     StageLatencyProbe,
 )
 from apps.vision_service.src.services.event_publisher import JsonlEventPublisher
+from apps.vision_service.src.services.redis_alert_publisher import RedisAlertPublisher
 from apps.vision_service.src.settings import RootSettings
 from apps.vision_service.src.utils.gst_utils import make_element, request_streammux_sink_pad
 
@@ -39,6 +40,19 @@ logger = get_logger(__name__)
 def _set_property_if_exists(element: Gst.Element, property_name: str, value: object) -> None:
     if element.find_property(property_name) is not None:
         element.set_property(property_name, value)
+
+
+def _get_unified_mem_type() -> int:
+    """
+    DeepStream dGPU unified memory enum for nvbuf-memory-type.
+    Fallback to 3 when pyds enum is unavailable.
+    """
+    try:
+        import pyds  # noqa: PLC0415
+
+        return int(pyds.NVBUF_MEM_CUDA_UNIFIED)
+    except Exception:
+        return 3
 
 
 def _configure_live_queue(queue: Gst.Element, *, silent: bool = True) -> None:
@@ -86,12 +100,19 @@ class PipelineBuilder:
         self.event_publisher = JsonlEventPublisher(
             output_file=self.settings.events.output_file,
         )
+        self.redis_alert_publisher: RedisAlertPublisher | None = None
         self.infer_probe: InferProbe | None = None
         self.stage_latency_probe: StageLatencyProbe | None = None
         self.runtime_metrics_probe: RuntimeMetricsProbe | None = None
 
         self._infer_assets = None
         self.tiler: Gst.Element | None = None
+        self.snapshot_tee: Gst.Element | None = None
+        self.snapshot_queue: Gst.Element | None = None
+        self.snapshot_convert: Gst.Element | None = None
+        self.snapshot_capsfilter: Gst.Element | None = None
+        self.snapshot_fakesink: Gst.Element | None = None
+        self.live_branch_queue: Gst.Element | None = None
         self.pre_osd_convert: Gst.Element | None = None
         self.pre_osd_capsfilter: Gst.Element | None = None
         self.osd: Gst.Element | None = None
@@ -282,6 +303,59 @@ class PipelineBuilder:
             "batched-push-timeout",
             self.settings.pipeline.batched_push_timeout_usec,
         )
+        use_snapshot_branch = (
+            self.settings.telegram.enabled
+            and self.settings.telegram.snapshot_source == "probe"
+        )
+        if use_snapshot_branch:
+            unified_mem_type = _get_unified_mem_type()
+            # Snapshot branch: queue → nvvideoconvert (NV12→RGBA) → capsfilter(RGBA)
+            # Probe attach vào snapshot_capsfilter.src — buffer lúc này là per-source frame (960×544 RGBA)
+            # không phải tiled frame.
+            self.snapshot_queue = make_element("queue", "snapshot-queue")
+            self.snapshot_queue.set_property("max-size-buffers", 4)
+            self.snapshot_queue.set_property("max-size-bytes", 0)
+            self.snapshot_queue.set_property("max-size-time", 0)
+            self.snapshot_queue.set_property("leaky", 2)  # downstream leaky — drop old if busy
+            _set_property_if_exists(self.snapshot_queue, "silent", True)
+
+            self.snapshot_convert = make_element("nvvideoconvert", "snapshot-convert")
+            _set_property_if_exists(self.snapshot_convert, "nvbuf-memory-type", unified_mem_type)
+
+            self.snapshot_capsfilter = make_element("capsfilter", "snapshot-capsfilter")
+            self.snapshot_capsfilter.set_property(
+                "caps",
+                Gst.Caps.from_string("video/x-raw(memory:NVMM),format=RGBA"),
+            )
+
+            if n_cameras > 1 and self.settings.tiler.enabled:
+                # Tạo tee để split: snapshot branch và live branch
+                self.snapshot_tee = make_element("tee", "snapshot-tee")
+                self.live_branch_queue = make_element("queue", "live-branch-queue")
+                self.live_branch_queue.set_property("max-size-buffers", 8)
+                self.live_branch_queue.set_property("max-size-bytes", 0)
+                self.live_branch_queue.set_property("max-size-time", 0)
+                _set_property_if_exists(self.live_branch_queue, "silent", True)
+            else:
+                # 1 camera: không cần tee, insert thẳng trước pre_osd_convert
+                self.snapshot_tee = None
+                self.live_branch_queue = None
+
+            # Apply unified memory to streammux và pre_osd_convert
+            _set_property_if_exists(streammux, "nvbuf-memory-type", unified_mem_type)
+            _set_property_if_exists(self.pre_osd_convert, "nvbuf-memory-type", unified_mem_type)
+            logger.info(
+                "Snapshot branch created | nvbuf-memory-type=%d | tee=%s | tiler=%s",
+                unified_mem_type,
+                "enabled" if self.snapshot_tee is not None else "disabled",
+                "enabled" if n_cameras > 1 and self.settings.tiler.enabled else "disabled",
+            )
+        else:
+            self.snapshot_queue = None
+            self.snapshot_convert = None
+            self.snapshot_capsfilter = None
+            self.snapshot_tee = None
+            self.live_branch_queue = None
 
         is_live = any(c.stream.type in ("hls", "rtsp") for c in self.settings.cameras)
         streammux.set_property("live-source", 1 if is_live else 0)
@@ -298,6 +372,17 @@ class PipelineBuilder:
             pipeline.add(tracker)
         pipeline.add(queue)
         pipeline.add(identity)
+        # Snapshot branch elements
+        if self.snapshot_tee is not None:
+            pipeline.add(self.snapshot_tee)
+        if self.snapshot_queue is not None:
+            pipeline.add(self.snapshot_queue)
+        if self.snapshot_convert is not None:
+            pipeline.add(self.snapshot_convert)
+        if self.snapshot_capsfilter is not None:
+            pipeline.add(self.snapshot_capsfilter)
+        if self.live_branch_queue is not None:
+            pipeline.add(self.live_branch_queue)
         if self.tiler is not None:
             pipeline.add(self.tiler)
         pipeline.add(pre_osd_queue)
@@ -348,15 +433,85 @@ class PipelineBuilder:
         if not queue.link(identity):
             raise RuntimeError("Failed to link queue -> identity.")
 
-        # Nếu có tiler, chèn vào giữa identity và pre_osd_convert
-        if self.tiler is not None:
-            if not identity.link(self.tiler):
-                raise RuntimeError("Failed to link identity -> nvmultistreamtiler.")
+        # ── Pipeline linking sau identity ──────────────────────────────────────────
+        # Case A: snapshot branch + tiler (multi-camera)
+        #   identity → snapshot_tee
+        #     src_0 → snapshot_queue → snapshot_convert → snapshot_capsfilter (RGBA probe)
+        #     src_1 → live_branch_queue → tiler → pre_osd_convert → ...
+        # Case B: snapshot branch, khÃ´ng tiler (1 camera)
+        #   identity → snapshot_queue → snapshot_convert → snapshot_capsfilter (RGBA probe)
+        #           → pre_osd_convert → ...
+        # Case C: khÃ´ng snapshot branch (telegram disabled hoặc snapshot_source != probe)
+        #   identity → [tiler nếu có] → pre_osd_convert → ...
+
+        if self.snapshot_tee is not None and self.live_branch_queue is not None:
+            # Case A: tee → (snapshot branch) + (live branch → tiler)
+            if not identity.link(self.snapshot_tee):
+                raise RuntimeError("Failed to link identity -> snapshot-tee.")
+
+            # Snapshot branch: tee.src_0 → snapshot_queue → snapshot_convert → snapshot_capsfilter
+            tee_snap_pad = self.snapshot_tee.get_request_pad("src_%u")
+            snap_queue_sink = self.snapshot_queue.get_static_pad("sink")
+            if tee_snap_pad is None or snap_queue_sink is None:
+                raise RuntimeError("Failed to get pads for snapshot branch.")
+            if tee_snap_pad.link(snap_queue_sink) != Gst.PadLinkReturn.OK:
+                raise RuntimeError("Failed to link snapshot-tee.src_0 -> snapshot-queue.")
+            if not self.snapshot_queue.link(self.snapshot_convert):
+                raise RuntimeError("Failed to link snapshot-queue -> snapshot-convert.")
+            if not self.snapshot_convert.link(self.snapshot_capsfilter):
+                raise RuntimeError("Failed to link snapshot-convert -> snapshot-capsfilter.")
+            
+            # Link snapshot_capsfilter -> fakesink to keep the pipeline flow alive
+            self.snapshot_fakesink = make_element("fakesink", "snapshot-fakesink")
+            self.snapshot_fakesink.set_property("sync", False)
+            self.snapshot_fakesink.set_property("async", False)
+            pipeline.add(self.snapshot_fakesink)
+            if not self.snapshot_capsfilter.link(self.snapshot_fakesink):
+                raise RuntimeError("Failed to link snapshot-capsfilter -> snapshot-fakesink.")
+
+            # Live branch: tee.src_1 → live_branch_queue → tiler → pre_osd_convert
+            tee_live_pad = self.snapshot_tee.get_request_pad("src_%u")
+            live_queue_sink = self.live_branch_queue.get_static_pad("sink")
+            if tee_live_pad is None or live_queue_sink is None:
+                raise RuntimeError("Failed to get pads for live branch.")
+            if tee_live_pad.link(live_queue_sink) != Gst.PadLinkReturn.OK:
+                raise RuntimeError("Failed to link snapshot-tee.src_1 -> live-branch-queue.")
+            if not self.live_branch_queue.link(self.tiler):
+                raise RuntimeError("Failed to link live-branch-queue -> nvmultistreamtiler.")
             if not self.tiler.link(self.pre_osd_convert):
                 raise RuntimeError("Failed to link nvmultistreamtiler -> pre-osd-convert.")
+
+            logger.info(
+                "Pipeline linked: identity -> snapshot-tee -> ("
+                "snapshot branch: snapshot-queue -> snapshot-convert -> snapshot-capsfilter -> snapshot-fakesink) + "
+                "(live branch: live-branch-queue -> tiler -> pre-osd-convert)"
+            )
+
+        elif self.snapshot_queue is not None and self.snapshot_tee is None:
+            # Case B: 1 camera, no tee — identity â†’ snapshot branch â†’ pre_osd_convert
+            if not identity.link(self.snapshot_queue):
+                raise RuntimeError("Failed to link identity -> snapshot-queue.")
+            if not self.snapshot_queue.link(self.snapshot_convert):
+                raise RuntimeError("Failed to link snapshot-queue -> snapshot-convert.")
+            if not self.snapshot_convert.link(self.snapshot_capsfilter):
+                raise RuntimeError("Failed to link snapshot-convert -> snapshot-capsfilter.")
+            if not self.snapshot_capsfilter.link(self.pre_osd_convert):
+                raise RuntimeError("Failed to link snapshot-capsfilter -> pre-osd-convert.")
+
+            logger.info(
+                "Pipeline linked: identity -> snapshot-queue -> snapshot-convert "
+                "-> snapshot-capsfilter -> pre-osd-convert (single-camera, no tee)"
+            )
         else:
-            if not identity.link(self.pre_osd_convert):
-                raise RuntimeError("Failed to link identity -> pre-osd-convert.")
+            # Case C: no snapshot branch
+            if self.tiler is not None:
+                if not identity.link(self.tiler):
+                    raise RuntimeError("Failed to link identity -> nvmultistreamtiler.")
+                if not self.tiler.link(self.pre_osd_convert):
+                    raise RuntimeError("Failed to link nvmultistreamtiler -> pre-osd-convert.")
+            else:
+                if not identity.link(self.pre_osd_convert):
+                    raise RuntimeError("Failed to link identity -> pre-osd-convert.")
         if not self.pre_osd_convert.link(self.pre_osd_capsfilter):
             raise RuntimeError("Failed to link pre-osd-convert -> pre-osd-capsfilter.")
         if not self.pre_osd_capsfilter.link(pre_osd_queue):
@@ -600,13 +755,41 @@ class PipelineBuilder:
                 source_id=0,
             )
 
-        probe_element = tracker if tracker is not None else infer
-        if probe_element is not None:
+        # ── InferProbe attachment ─────────────────────────────────────────────────
+        # OSD styling và detection chạy trên main branch (identity trước tee) để tránh race condition trên live stream.
+        # Snapshot extraction chạy trên snapshot branch (snapshot-capsfilter).
+        if self.snapshot_capsfilter is not None:
+            detection_element = identity
+            snapshot_element = self.snapshot_capsfilter
+            probe_reason = (
+                f"detection on '{detection_element.get_name()}' (before tee), "
+                f"snapshot on '{snapshot_element.get_name()}' (RGBA)"
+            )
+        else:
+            detection_element = tracker if tracker is not None else infer
+            snapshot_element = None
+            probe_reason = (
+                f"detection on '{detection_element.get_name() if detection_element else 'None'}' "
+                "(no snapshot branch)"
+            )
+
+        if detection_element is not None:
+            if self.settings.telegram.enabled:
+                self.redis_alert_publisher = RedisAlertPublisher(self.settings)
             self.infer_probe = InferProbe(
                 settings=self.settings,
                 publisher=self.event_publisher,
+                redis_alert_publisher=self.redis_alert_publisher,
             )
-            self.infer_probe.attach(probe_element, pad_name="src")
+            self.infer_probe.attach(
+                detection_element=detection_element,
+                snapshot_element=snapshot_element,
+                pad_name="src",
+            )
+            logger.info(
+                "InferProbe tap selected | reason=%s",
+                probe_reason,
+            )
 
         # RuntimeMetricsProbe (FPS, Queue level, System)
         queue_elements = {
@@ -677,12 +860,18 @@ class PipelineBuilder:
             raise RuntimeError("Failed to set pipeline to PLAYING state.")
 
     def stop(self) -> None:
+        if self.redis_alert_publisher is not None:
+            self.redis_alert_publisher.stop()
+            self.redis_alert_publisher = None
+
         if self.pipeline is None:
             logger.info("Pipeline was never created; nothing to stop.")
             return
 
         logger.info("Stopping pipeline...")
         try:
+            # Send flush-start to immediately unblock all streaming threads (decoders, queues, sinks)
+            self.pipeline.send_event(Gst.Event.new_flush_start())
             self.pipeline.set_state(Gst.State.NULL)
             self.pipeline.get_state(5 * Gst.SECOND)
         except Exception as exc:
@@ -705,6 +894,12 @@ class PipelineBuilder:
             self.pre_osd_convert = None
             self.pre_osd_queue = None
             self.pre_encoder_queue = None
+            self.live_branch_queue = None
+            self.snapshot_fakesink = None
+            self.snapshot_capsfilter = None
+            self.snapshot_convert = None
+            self.snapshot_queue = None
+            self.snapshot_tee = None
             self.identity = None
             self.queue = None
             self.tracker = None

@@ -1,0 +1,23 @@
+# MediaMTX configuration — optimized for DeepStream vision service
+# Tắt cookie check để GStreamer (souphttpsrc) có thể truy cập HLS trực tiếp
+
+logLevel: info
+logDestinations: [stdout]
+
+# API
+api: yes
+apiAddress: :9997
+
+# RTSP
+rtspAddress: :8554
+
+# RTMP
+rtmpAddress: :1935
+
+# HLS — tắt encryption, để mặc định port 8888
+hlsAddress: :8888
+
+# Paths
+paths:
+  "~^.*$":
+    source: publisher
