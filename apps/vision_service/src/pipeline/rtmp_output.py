@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from urllib.parse import urlparse
+
 import gi
 
 gi.require_version("Gst", "1.0")
@@ -144,6 +146,7 @@ def _resolve_rtmp_sink_factory() -> str:
 def _configure_rtmp_mux_and_sink(
     settings: RootSettings,
     *,
+    sink_factory: str,
     muxer: Gst.Element,
     sink: Gst.Element,
 ) -> None:
@@ -151,10 +154,45 @@ def _configure_rtmp_mux_and_sink(
     if not location:
         raise RuntimeError("RTMP output location is empty. Please set rtmp.location in app.yaml.")
 
+    # `rtmpsink` accepts libRTMP-style suffixes such as `live=1` in the same
+    # location string, while `rtmp2sink` expects a plain URI.
+    if sink_factory == "rtmp2sink":
+        normalized_location = location.split()[0]
+        parsed = urlparse(normalized_location)
+        if parsed.scheme in {"rtmp", "rtmps"} and parsed.hostname:
+            segments = [seg for seg in parsed.path.split("/") if seg]
+            app = "live"
+            stream = "vision1"
+            if len(segments) >= 2:
+                app = segments[0]
+                stream = "/".join(segments[1:])
+            elif len(segments) == 1:
+                stream = segments[0]
+
+            _set_property_if_exists(sink, "scheme", parsed.scheme)
+            _set_property_if_exists(sink, "host", parsed.hostname)
+            _set_property_if_exists(sink, "port", parsed.port or 1935)
+            _set_property_if_exists(sink, "application", app)
+            _set_property_if_exists(sink, "stream", stream)
+            normalized_location = f"{parsed.scheme}://{parsed.hostname}:{parsed.port or 1935}/{app}/{stream}"
+        if normalized_location != location:
+            logger.warning(
+                "RTMP location contains legacy libRTMP options; normalized for rtmp2sink"
+                " | original=%s | normalized=%s",
+                location,
+                normalized_location,
+            )
+        location = normalized_location
+
     _set_property_if_exists(muxer, "streamable", settings.rtmp.streamable_mux)
+    _set_property_if_exists(muxer, "skip-backwards-streams", True)
+    _set_property_if_exists(muxer, "latency", 0)
     sink.set_property("location", location)
     _set_property_if_exists(sink, "sync", settings.rtmp.sink_sync)
     _set_property_if_exists(sink, "async", settings.rtmp.sink_async)
+    _set_property_if_exists(sink, "qos", False)
+    if sink_factory == "rtmp2sink":
+        _set_property_if_exists(sink, "async-connect", False)
 
 
 def create_rtmp_output_chain(settings: RootSettings) -> RtmpOutputChain:
@@ -188,7 +226,12 @@ def create_rtmp_output_chain(settings: RootSettings) -> RtmpOutputChain:
         encoder=encoder,
         parser=parser,
     )
-    _configure_rtmp_mux_and_sink(settings, muxer=muxer, sink=sink)
+    _configure_rtmp_mux_and_sink(
+        settings,
+        sink_factory=sink_factory,
+        muxer=muxer,
+        sink=sink,
+    )
 
     logger.info(
         "RTMP output ready | sink=%s | location=%s | bitrate=%d | iframe_interval=%d"

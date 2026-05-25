@@ -870,6 +870,8 @@ class PipelineBuilder:
 
         logger.info("Stopping pipeline...")
         try:
+            # Send flush-start to immediately unblock all streaming threads (decoders, queues, sinks)
+            self.pipeline.send_event(Gst.Event.new_flush_start())
             self.pipeline.set_state(Gst.State.NULL)
             self.pipeline.get_state(5 * Gst.SECOND)
         except Exception as exc:

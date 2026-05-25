@@ -34,12 +34,9 @@ class VisionApp:
 
     def stop(self) -> None:
         try:
-            self.pipeline_builder.stop()
-        finally:
-            try:
-                self.main_loop.quit()
-            except Exception:
-                pass
+            self.main_loop.quit()
+        except Exception:
+            pass
 
     # ------------------------------------------------------------------
     # Prometheus metrics server

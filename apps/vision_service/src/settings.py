@@ -103,7 +103,7 @@ class RtspConfig(BaseModel):
 
 class RtmpConfig(BaseModel):
     enabled: bool = True
-    location: str = "rtmp://127.0.0.1/live/vision live=1"
+    location: str = "rtmp://127.0.0.1:1935/vision1"
     sink_sync: bool = False
     sink_async: bool = False
     streamable_mux: bool = True
@@ -134,7 +134,7 @@ class TelegramConfig(BaseModel):
     min_consecutive_no_helmet_frames: int = Field(default=3, ge=1)
     snapshot_dir: str = "/workspace/storage/snapshots"
     snapshot_rtmp_url: str = "rtmp://mediamtx:1935/vision1"
-    snapshot_hls_url: str = "http://mediamtx:8888/vision1/index.m3u8"
+    snapshot_hls_url: str = "http://mediamtx:8888/vision1/index.m3u8?cookieCheck=1"
 
 
 class TilerConfig(BaseModel):
@@ -226,7 +226,7 @@ def load_settings() -> RootSettings:
                     "RTMP_LOCATION",
                     raw_app.get("rtmp", {}).get(
                         "location",
-                        "rtmp://127.0.0.1/live/vision live=1",
+                        "rtmp://127.0.0.1:1935/vision1",
                     ),
                 ),
             },
@@ -279,7 +279,7 @@ def load_settings() -> RootSettings:
                 "snapshot_hls_url": os.getenv(
                     "TELEGRAM_SNAPSHOT_HLS_URL",
                     raw_app.get("telegram", {}).get(
-                        "snapshot_hls_url", "http://mediamtx:8888/vision1/index.m3u8"
+                        "snapshot_hls_url", "http://mediamtx:8888/vision1/index.m3u8?cookieCheck=1"
                     ),
                 ),
             },

@@ -72,7 +72,7 @@ rtsp:
 rtmp:
   enabled: true
   # MediaMTX publish URL (docker-compose service name)
-  location: "rtmp://mediamtx:1935/vision1 live=1"
+  location: "rtmp://mediamtx:1935/vision1"
   sink_sync: false
   sink_async: false
   streamable_mux: true
@@ -101,4 +101,4 @@ telegram:
   min_consecutive_no_helmet_frames: 3
   snapshot_dir: /workspace/storage/snapshots
   snapshot_rtmp_url: rtmp://mediamtx:1935/vision1
-  snapshot_hls_url: http://mediamtx:8888/vision1/index.m3u8
+  snapshot_hls_url: http://mediamtx:8888/vision1/index.m3u8?cookieCheck=1
