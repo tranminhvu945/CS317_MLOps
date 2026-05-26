@@ -75,9 +75,44 @@ class BusHandler:
 
         if message_type == Gst.MessageType.ERROR:
             err, debug = message.parse_error()
-            logger.error("GStreamer ERROR: %s | debug=%s", err, debug)
-            self.main_loop.quit()
-            return
+            src_element = message.src
+            
+            # Determine if this error originates from a source bin
+            is_source_err = False
+            curr = src_element
+            while curr is not None:
+                name = curr.get_name()
+                if (
+                    name.startswith("source-bin-")
+                    or "decode-bin" in name
+                    or "rtspsrc" in name
+                    or "souphttpsrc" in name
+                    or "hlsdemux" in name
+                ):
+                    is_source_err = True
+                    break
+                try:
+                    curr = curr.get_parent()
+                except Exception:
+                    curr = None
+
+            if is_source_err:
+                logger.warning(
+                    "GStreamer source error (non-fatal, will retry/ignored): %s | element=%s | debug=%s",
+                    err,
+                    src_element.get_name() if src_element else "unknown",
+                    debug,
+                )
+                return
+            else:
+                logger.error(
+                    "GStreamer fatal ERROR from element %s: %s | debug=%s",
+                    src_element.get_name() if src_element else "unknown",
+                    err,
+                    debug,
+                )
+                self.main_loop.quit()
+                return
 
         if message_type == Gst.MessageType.WARNING:
             err, debug = message.parse_warning()

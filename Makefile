@@ -1,4 +1,4 @@
-.PHONY: run build up down stack-up stack-down sim-check scale-1 scale-2 scale-4 clean mediamtx-up mediamtx-down mediamtx-status publishers-up publishers-down publishers-status monitoring-up monitoring-down monitoring-restart monitoring-status monitoring-logs
+.PHONY: run build up down stack-up stack-down sim-check scale-1 scale-2 scale-4 clean mediamtx-up mediamtx-down mediamtx-status publishers-up publishers-down publishers-status monitoring-up monitoring-down monitoring-restart monitoring-status monitoring-logs compile-parser
 
 IMAGE  ?= uit_medseg/mlops_thuc:dev
 PYTHON := python3
@@ -10,7 +10,18 @@ MEDIAMTX_SCRIPT := bash scripts/rtsp_sim_mediamtx.sh
 
 ## Run vision-service (no rebuild — uses existing image)
 ## Auto-removes any stale container with the same name before starting.
-run:
+## Compile custom Yolo parser C++ code into .so library
+compile-parser:
+	@echo ">>> Compiling custom Yolo parser C++ code..."
+	@mkdir -p apps/vision_service/libs/deepstream/lib
+	@docker run --rm \
+		-v $(PWD):/workspace \
+		$(IMAGE) \
+		make -C /workspace/apps/vision_service/src/deepstream/custom_parser -j$$(nproc) DS_LIB=/workspace/apps/vision_service/libs/deepstream/lib
+
+run: compile-parser
+	@echo ">>> Ensuring dependencies are running: redis + mediamtx + telegram-worker..."
+	@$(COMPOSE) up -d redis mediamtx telegram-worker
 	@HOST_GPU_ID=$${HOST_GPU_ID:-7}; \
 	CONTAINER_GPU_ID=$${GPU_ID:-0}; \
 	echo ">>> Starting mlops_thuc (host GPU $$HOST_GPU_ID -> container GPU $$CONTAINER_GPU_ID)..."; \
@@ -172,6 +183,9 @@ mediamtx-status:
 
 ## Start 4 HLS publishers (cam01..cam04 loop MP4 → RTMP → MediaMTX → HLS)
 publishers-up:
+	@echo ">>> Ensuring mediamtx is running before starting publishers..."
+	@$(COMPOSE) up -d mediamtx
+	@sleep 2
 	PROTOCOL=hls bash scripts/rtsp_sim_publishers.sh up
 
 ## Stop all HLS publishers
@@ -213,3 +227,20 @@ monitoring-status:
 ## Tail logs from monitoring containers
 monitoring-logs:
 	$(COMPOSE) logs -f --tail=50 prometheus grafana
+
+# ── MLOps Automation Pipeline ────────────────────────────────────────────────
+
+## Run the end-to-end MLOps pipeline (data pull -> train -> evaluate -> compile)
+mlops-pipeline:
+	@echo ">>> Pulling latest data and pipeline state via DVC..."
+	dvc pull
+	@echo ">>> Executing automated MLOps pipeline stages..."
+	dvc repro
+
+## Deploy the active model by updating symlink and restarting the vision container
+deploy-model:
+	@echo ">>> Updating symlink for active engine..."
+	cd apps/vision_service/models/yolov8 && ln -sf yolov8_helmet.onnx_b1_gpu0_fp16.engine yolov8_helmet_active.engine
+	@echo ">>> Restarting vision-service container to load new engine..."
+	docker restart uit_medseg_vision 2>/dev/null || $(COMPOSE) restart vision-service
+

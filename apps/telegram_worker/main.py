@@ -69,13 +69,9 @@ def send_photo_to_telegram(
     chat_id: str,
     event: dict | None = None,
     *,
-    followup_caption: str | None = None,
+    caption: str | None = None,
 ) -> bool:
-    """Gửi ảnh followup KHÔNG kèm full caption để tránh lặp nội dung.
-
-    Khi text-first đã gửi sendMessage với full caption rồi,
-    sendPhoto chỉ gửi ảnh (không caption) hoặc caption ngắn.
-    """
+    """Gửi ảnh kèm caption thông báo."""
     if not os.path.exists(snapshot_path):
         if event is not None:
             logger.warning(
@@ -94,21 +90,20 @@ def send_photo_to_telegram(
         except OSError:
             file_size_kb = 0.0
         logger.info(
-            f"[LATENCY][PHOTO_FOLLOWUP_START] "
+            f"[LATENCY][PHOTO_SEND_START] "
             f"event_id={event.get('event_id')} "
             f"snapshot_path={snapshot_path} "
             f"file_size_kb={file_size_kb:.2f} "
-            f"caption_mode={'none' if followup_caption is None else 'short'}"
+            f"caption_mode={'none' if caption is None else 'full'}"
         )
 
     t_before = time.time()
     try:
         with open(snapshot_path, "rb") as photo_file:
             files = {"photo": photo_file}
-            # Không gửi caption để tránh lặp nội dung (text-first đã gửi full caption rồi)
             data: dict = {"chat_id": chat_id}
-            if followup_caption is not None:
-                data["caption"] = followup_caption
+            if caption is not None:
+                data["caption"] = caption
                 data["parse_mode"] = "HTML"
             with httpx.Client(timeout=15.0) as client:
                 response = client.post(api_url, data=data, files=files)
@@ -123,16 +118,16 @@ def send_photo_to_telegram(
                 logger.info("Successfully sent snapshot to Telegram: %s", snapshot_path)
                 if event is not None:
                     logger.info(
-                        f"[LATENCY][PHOTO_FOLLOWUP_SENT] "
+                        f"[LATENCY][PHOTO_SENT] "
                         f"event_id={event.get('event_id')} "
                         f"telegram_ms={(t_after - t_before) * 1000:.2f} "
                         f"status_code={response.status_code} "
                         f"detect_to_telegram_ms={(t_after - event.get('ts_detect', t_after)) * 1000:.2f} "
-                        f"caption_mode={'none' if followup_caption is None else 'short'}"
+                        f"caption_mode={'none' if caption is None else 'full'}"
                     )
                 return True
     except Exception as exc:  # noqa: BLE001
-        logger.error("Failed to send photo followup to Telegram: %s", exc)
+        logger.error("Failed to send photo to Telegram: %s", exc)
         return False
 
 
@@ -265,31 +260,31 @@ def main() -> None:
             caption = _build_caption(payload)
             snapshot_path = _extract_snapshot_path(payload)
 
-            # ── Step 1: Luôn gửi text alert ngay lập tức ──────────────────────
-            # Text-first là behavior mặc định để đảm bảo latency < 1.5s
-            send_text_to_telegram(
-                caption,
-                TELEGRAM_BOT_TOKEN,
-                TELEGRAM_CHAT_ID,
-                event=payload,
-                label="TEXT_FIRST",
-            )
-
-            # ── Step 2: Gửi ảnh như follow-up nếu snapshot tồn tại ───────────
-            # Không gửi caption để tránh lặp nội dung — sendMessage đã gửi full caption rồi.
+            # ── Gửi cảnh báo ─────────────────────────────────────────────────
+            # Ưu tiên gửi ảnh kèm caption (để hiển thị trực quan và gọn trong 1 tin nhắn).
+            # Nếu không có ảnh hoặc gửi ảnh thất bại, tự động fallback sang gửi tin nhắn text.
+            photo_sent = False
             if snapshot_path:
-                send_photo_to_telegram(
+                photo_sent = send_photo_to_telegram(
                     snapshot_path,
                     TELEGRAM_BOT_TOKEN,
                     TELEGRAM_CHAT_ID,
                     event=payload,
-                    followup_caption=None,  # caption_mode=none
+                    caption=caption,
                 )
-            else:
+
+            if not photo_sent:
                 logger.info(
-                    f"[LATENCY][NO_SNAPSHOT] "
+                    f"[LATENCY][FALLBACK_TO_TEXT] "
                     f"event_id={payload.get('event_id')} "
-                    f"reason=no_snapshot_path_in_payload"
+                    f"reason={'snapshot_missing' if not snapshot_path else 'send_photo_failed'}"
+                )
+                send_text_to_telegram(
+                    caption,
+                    TELEGRAM_BOT_TOKEN,
+                    TELEGRAM_CHAT_ID,
+                    event=payload,
+                    label="TEXT_FALLBACK",
                 )
 
         except json.JSONDecodeError:
