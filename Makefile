@@ -215,3 +215,20 @@ monitoring-status:
 ## Tail logs from monitoring containers
 monitoring-logs:
 	$(COMPOSE) logs -f --tail=50 prometheus grafana
+
+# ── MLOps Automation Pipeline ────────────────────────────────────────────────
+
+## Run the end-to-end MLOps pipeline (data pull -> train -> evaluate -> compile)
+mlops-pipeline:
+	@echo ">>> Pulling latest data and pipeline state via DVC..."
+	dvc pull
+	@echo ">>> Executing automated MLOps pipeline stages..."
+	dvc repro
+
+## Deploy the active model by updating symlink and restarting the vision container
+deploy-model:
+	@echo ">>> Updating symlink for active engine..."
+	cd apps/vision_service/models/yolov8 && ln -sf yolov8_helmet.onnx_b1_gpu0_fp16.engine yolov8_helmet_active.engine
+	@echo ">>> Restarting vision-service container to load new engine..."
+	docker restart uit_medseg_vision 2>/dev/null || $(COMPOSE) restart vision-service
+

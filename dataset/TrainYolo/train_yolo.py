@@ -88,7 +88,7 @@ def main():
     mlflow_cfg = params["mlflow"]
 
     registry_name = mlflow_cfg.get("registry_name", "YOLOv8_Helmet_Model")
-    deploy_alias = mlflow_cfg.get("deploy_alias", "Production")
+    deploy_alias = "Candidate"
 
     # ── MLflow Tracking Configuration ────────────────────────────────────────
     tracking_uri = mlflow_cfg.get("tracking_uri")

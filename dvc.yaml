@@ -34,12 +34,22 @@ stages:
       - runs/detect/${train.project}/${train.name}/results.csv:
           cache: false
 
+  # ─── Stage 3.5: Kiểm định chất lượng (Quality Gate) ──────────────────────────
+  evaluate:
+    cmd: python3 scripts/evaluate_model.py
+    deps:
+      - scripts/evaluate_model.py
+      - runs/detect/${train.project}/${train.name}/weights/best.pt
+    outs:
+      - runs/detect/${train.project}/${train.name}/evaluate_status.json:
+          cache: false
+
   # ─── Stage 4: Export best.pt sang ONNX ───────────────────────────────────
   export:
     cmd: python3 scripts/export_onnx.py
     deps:
       - scripts/export_onnx.py
-      - runs/detect/${train.project}/${train.name}/weights/best.pt
+      - runs/detect/${train.project}/${train.name}/evaluate_status.json
     params:
       - params.yaml:
           - mlflow.tracking_uri
