@@ -9,6 +9,9 @@ from pydantic import BaseModel, Field
 
 from apps.vision_service.src.domain.camera_schema import CameraConfig
 from apps.vision_service.src.utils.file_utils import ensure_dir
+from apps.vision_service.src.logger import get_logger
+
+logger = get_logger(__name__)
 
 
 def _env_bool(name: str, default: bool) -> bool:
@@ -288,6 +291,90 @@ def load_settings() -> RootSettings:
 
     camera_dir = _resolve_path(settings.streams.scan_camera_dir, config_dir)
     cameras = _load_camera_configs(camera_dir)
+
+    # Filter reachable cameras if enabled
+    if _env_bool("CHECK_CAMERA_REACHABILITY", True):
+        import urllib.request
+        import urllib.error
+        import socket
+        import time
+        from urllib.parse import urlparse
+        from concurrent.futures import ThreadPoolExecutor
+
+        def is_uri_reachable(uri: str) -> bool:
+            parsed = urlparse(uri)
+            if not parsed.scheme or parsed.scheme == "file":
+                return Path(parsed.path).exists()
+
+            max_attempts = 5
+            for attempt in range(max_attempts):
+                reached = False
+                if parsed.scheme in {"http", "https"}:
+                    try:
+                        req = urllib.request.Request(uri, method="HEAD")
+                        with urllib.request.urlopen(req, timeout=1.0) as resp:
+                            if resp.status == 200:
+                                reached = True
+                    except Exception:
+                        try:
+                            with urllib.request.urlopen(uri, timeout=1.0) as resp:
+                                if resp.status == 200:
+                                    reached = True
+                        except Exception:
+                            pass
+                elif parsed.scheme == "rtsp":
+                    port = parsed.port if parsed.port is not None else 554
+                    host = parsed.hostname
+                    if host:
+                        try:
+                            with socket.create_connection((host, port), timeout=1.0):
+                                reached = True
+                        except Exception:
+                            pass
+                elif parsed.scheme == "rtmp":
+                    port = parsed.port if parsed.port is not None else 1935
+                    host = parsed.hostname
+                    if host:
+                        try:
+                            with socket.create_connection((host, port), timeout=1.0):
+                                reached = True
+                        except Exception:
+                            pass
+                else:
+                    return True
+
+                if reached:
+                    return True
+                if attempt < max_attempts - 1:
+                    time.sleep(1.0)
+            return False
+
+        logger.info("Verifying camera stream reachability (with retries for slow-starting mock streams)...")
+        reachable_cameras = []
+        with ThreadPoolExecutor(max_workers=max(1, len(cameras))) as executor:
+            futures = {executor.submit(is_uri_reachable, cam.stream.uri): cam for cam in cameras}
+            for future in futures:
+                cam = futures[future]
+                try:
+                    is_ok = future.result()
+                except Exception as e:
+                    logger.warning("Error checking reachability for %s: %s", cam.camera_id, e)
+                    is_ok = False
+                
+                if is_ok:
+                    reachable_cameras.append(cam)
+                else:
+                    logger.warning(
+                        "Camera %s is unreachable (uri=%s) - excluding from pipeline to prevent empty tiler tiles.",
+                        cam.camera_id,
+                        cam.stream.uri,
+                    )
+
+        if reachable_cameras:
+            cameras = reachable_cameras
+        else:
+            logger.warning("All cameras are unreachable! Keeping the original camera list as fallback.")
+
     settings = settings.model_copy(update={"cameras": cameras})
 
     ensure_dir(settings.storage.logs_dir)

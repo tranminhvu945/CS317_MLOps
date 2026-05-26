@@ -15,6 +15,7 @@ logger = get_logger(__name__)
 
 
 def main() -> int:
+    setup_logger("INFO")
     settings = load_settings()
     setup_logger(settings.app.log_level)
 

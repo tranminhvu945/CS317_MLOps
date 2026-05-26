@@ -174,6 +174,9 @@ mediamtx-status:
 
 ## Start 4 HLS publishers (cam01..cam04 loop MP4 → RTMP → MediaMTX → HLS)
 publishers-up:
+	@echo ">>> Ensuring mediamtx is running before starting publishers..."
+	@$(COMPOSE) up -d mediamtx
+	@sleep 2
 	PROTOCOL=hls bash scripts/rtsp_sim_publishers.sh up
 
 ## Stop all HLS publishers
