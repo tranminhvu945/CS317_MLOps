@@ -20,8 +20,8 @@ compile-parser:
 		make -C /workspace/apps/vision_service/src/deepstream/custom_parser -j$$(nproc) DS_LIB=/workspace/apps/vision_service/libs/deepstream/lib
 
 run: compile-parser
-	@echo ">>> Ensuring dependencies are running: redis + mediamtx..."
-	@$(COMPOSE) up -d redis mediamtx
+	@echo ">>> Ensuring dependencies are running: redis + mediamtx + telegram-worker..."
+	@$(COMPOSE) up -d redis mediamtx telegram-worker
 	@HOST_GPU_ID=$${HOST_GPU_ID:-7}; \
 	CONTAINER_GPU_ID=$${GPU_ID:-0}; \
 	echo ">>> Starting mlops_thuc (host GPU $$HOST_GPU_ID -> container GPU $$CONTAINER_GPU_ID)..."; \
