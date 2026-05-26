@@ -11,6 +11,8 @@ MEDIAMTX_SCRIPT := bash scripts/rtsp_sim_mediamtx.sh
 ## Run vision-service (no rebuild — uses existing image)
 ## Auto-removes any stale container with the same name before starting.
 run:
+	@echo ">>> Ensuring dependencies are running: redis + mediamtx..."
+	@$(COMPOSE) up -d redis mediamtx
 	@HOST_GPU_ID=$${HOST_GPU_ID:-7}; \
 	CONTAINER_GPU_ID=$${GPU_ID:-0}; \
 	echo ">>> Starting mlops_thuc (host GPU $$HOST_GPU_ID -> container GPU $$CONTAINER_GPU_ID)..."; \

@@ -33,3 +33,28 @@ stages:
     metrics:
       - runs/detect/${train.project}/${train.name}/results.csv:
           cache: false
+
+  # ─── Stage 4: Export best.pt sang ONNX ───────────────────────────────────
+  export:
+    cmd: python3 scripts/export_onnx.py
+    deps:
+      - scripts/export_onnx.py
+      - runs/detect/${train.project}/${train.name}/weights/best.pt
+    params:
+      - params.yaml:
+          - mlflow.tracking_uri
+          - mlflow.registry_name
+          - mlflow.deploy_alias
+    outs:
+      - apps/vision_service/models/yolov8/yolov8_helmet.onnx:
+          cache: false
+
+  # ─── Stage 5: Biên dịch ONNX sang TensorRT Engine ────────────────────────
+  compile:
+    cmd: make build-engine
+    deps:
+      - scripts/build_engine.sh
+      - apps/vision_service/models/yolov8/yolov8_helmet.onnx
+    outs:
+      - apps/vision_service/models/yolov8/yolov8_helmet.onnx_b1_gpu0_fp16.engine:
+          cache: true
