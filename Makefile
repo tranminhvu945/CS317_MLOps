@@ -1,4 +1,4 @@
-.PHONY: run build up down stack-up stack-down sim-check scale-1 scale-2 scale-4 clean mediamtx-up mediamtx-down mediamtx-status publishers-up publishers-down publishers-status monitoring-up monitoring-down monitoring-restart monitoring-status monitoring-logs
+.PHONY: run build up down stack-up stack-down sim-check scale-1 scale-2 scale-4 clean mediamtx-up mediamtx-down mediamtx-status publishers-up publishers-down publishers-status monitoring-up monitoring-down monitoring-restart monitoring-status monitoring-logs compile-parser
 
 IMAGE  ?= uit_medseg/mlops_thuc:dev
 PYTHON := python3
@@ -10,7 +10,16 @@ MEDIAMTX_SCRIPT := bash scripts/rtsp_sim_mediamtx.sh
 
 ## Run vision-service (no rebuild — uses existing image)
 ## Auto-removes any stale container with the same name before starting.
-run:
+## Compile custom Yolo parser C++ code into .so library
+compile-parser:
+	@echo ">>> Compiling custom Yolo parser C++ code..."
+	@mkdir -p apps/vision_service/libs/deepstream/lib
+	@docker run --rm \
+		-v $(PWD):/workspace \
+		$(IMAGE) \
+		make -C /workspace/apps/vision_service/src/deepstream/custom_parser -j$$(nproc) DS_LIB=/workspace/apps/vision_service/libs/deepstream/lib
+
+run: compile-parser
 	@echo ">>> Ensuring dependencies are running: redis + mediamtx..."
 	@$(COMPOSE) up -d redis mediamtx
 	@HOST_GPU_ID=$${HOST_GPU_ID:-7}; \
