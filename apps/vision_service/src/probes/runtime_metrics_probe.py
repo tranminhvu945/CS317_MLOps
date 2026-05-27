@@ -263,6 +263,9 @@ class RuntimeMetricsProbe:
                 "gpu_utilization_pct": system_metrics["gpu_utilization_pct"],
                 "ram_utilization_pct": system_metrics["ram_utilization_pct"],
                 "vram_utilization_pct": system_metrics["vram_utilization_pct"],
+                "cpu_temp_celsius": system_metrics["cpu_temp_celsius"],
+                "gpu_temp_celsius": system_metrics["gpu_temp_celsius"],
+                "camera_active": 1 if input_fps > 0 else 0,
                 "rtmp_delay_ms": round(rtmp_delay_ms, 3),
             }
 
@@ -351,13 +354,16 @@ class RuntimeMetricsProbe:
     def _sample_system_metrics(self) -> Dict[str, Optional[float]]:
         cpu_util = self._sample_cpu_percent()
         ram_util = self._sample_ram_percent()
-        gpu_util, vram_util = self._sample_gpu_metrics()
+        gpu_util, vram_util, gpu_temp = self._sample_gpu_metrics()
+        cpu_temp = self._sample_cpu_temperature()
 
         return {
             "cpu_utilization_pct": self._round_or_none(cpu_util),
             "gpu_utilization_pct": self._round_or_none(gpu_util),
             "ram_utilization_pct": self._round_or_none(ram_util),
             "vram_utilization_pct": self._round_or_none(vram_util),
+            "cpu_temp_celsius": self._round_or_none(cpu_temp),
+            "gpu_temp_celsius": self._round_or_none(gpu_temp),
         }
 
     def _sample_cpu_percent(self) -> Optional[float]:
@@ -421,11 +427,11 @@ class RuntimeMetricsProbe:
         used_kb = max(mem_total_kb - mem_available_kb, 0)
         return (used_kb * 100.0) / float(mem_total_kb)
 
-    def _sample_gpu_metrics(self) -> tuple[Optional[float], Optional[float]]:
+    def _sample_gpu_metrics(self) -> tuple[Optional[float], Optional[float], Optional[float]]:
         cmd = [
             "nvidia-smi",
             f"--id={self.settings.app.gpu_id}",
-            "--query-gpu=utilization.gpu,memory.used,memory.total",
+            "--query-gpu=utilization.gpu,memory.used,memory.total,temperature.gpu",
             "--format=csv,noheader,nounits",
         ]
 
@@ -438,28 +444,58 @@ class RuntimeMetricsProbe:
                 timeout=0.8,
             )
         except (FileNotFoundError, subprocess.SubprocessError):
-            return None, None
+            return None, None, None
 
         first_line = result.stdout.strip().splitlines()[0] if result.stdout.strip() else ""
         if not first_line:
-            return None, None
+            return None, None, None
 
         parts = [part.strip() for part in first_line.split(",")]
-        if len(parts) < 3:
-            return None, None
+        if len(parts) < 4:
+            return None, None, None
 
         try:
             gpu_util = float(parts[0])
             mem_used_mb = float(parts[1])
             mem_total_mb = float(parts[2])
+            gpu_temp = float(parts[3])
         except ValueError:
-            return None, None
+            return None, None, None
 
         vram_util = None
         if mem_total_mb > 0:
             vram_util = (mem_used_mb * 100.0) / mem_total_mb
 
-        return gpu_util, vram_util
+        return gpu_util, vram_util, gpu_temp
+
+    def _sample_cpu_temperature(self) -> Optional[float]:
+        zones_path = Path("/sys/class/thermal")
+        if not zones_path.exists():
+            return None
+
+        cpu_temps = []
+        fallback_temps = []
+
+        for zone_dir in zones_path.glob("thermal_zone*"):
+            try:
+                type_file = zone_dir / "type"
+                temp_file = zone_dir / "temp"
+                if type_file.exists() and temp_file.exists():
+                    z_type = type_file.read_text(encoding="utf-8").strip().lower()
+                    z_temp = float(temp_file.read_text(encoding="utf-8").strip()) / 1000.0
+
+                    if "x86_pkg_temp" in z_type or "cpu" in z_type or "core" in z_type:
+                        cpu_temps.append(z_temp)
+                    else:
+                        fallback_temps.append(z_temp)
+            except Exception:
+                continue
+
+        if cpu_temps:
+            return sum(cpu_temps) / len(cpu_temps)
+        if fallback_temps:
+            return sum(fallback_temps) / len(fallback_temps)
+        return None
 
     def _round_or_none(self, value: Optional[float]) -> Optional[float]:
         if value is None:

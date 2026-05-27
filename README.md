@@ -52,9 +52,11 @@ UIT-MedSeg MLOps is a production-ready, GPU-accelerated video analytics pipeline
 | **Zero-Downtime Management** | Add/remove/toggle camera inputs on-the-fly using GStreamer `nvmultiurisrcbin` REST API (port 9091) |
 | **Telemetry & Metrics** | Prometheus metric exporter (port 9100) scraping pipeline latency and FPS |
 | **Redis Broker** | Asynchronous events publication to Redis queue channel (`helmet_violations`) |
-| **Text-First Alerting** | Telegram worker sends text alerts first (< 1.5s latency) and uploads photos as a follow-up |
+| **Consolidated Alerting** | Telegram worker sends a single photo alert with the violation text as a caption (automatically falls back to plain text if snapshot is missing) |
 | **Persistent Frame Cache** | Background daemon thread (`PersistentFrameCache`) keeps RTMP feed open to capture snapshots under `<1ms` (for `snapshot_source: rtmp`) |
 | **Pre-Tiled Snapshotting** | Pad probe extracts source-specific RGBA frames from pipeline before tiler (for `snapshot_source: probe`) |
+| **Developer DX Automation** | The C++ custom parser is dynamically compiled inside the container on startup; the `pyds` wheel is tracked directly by Git for out-of-the-box portability |
+| **Dynamic Layout Adaptation** | Automatically validates camera stream reachability on startup and disables the tiler (1x1 layout) when only one camera is active |
 
 ---
 
@@ -106,13 +108,13 @@ graph TD
 
 ### Flow Descriptions
 
-1. **Ingestion & AI Inference**: DeepStream ingests streams configured in `app.yaml` or dynamically via the API. The frames pass through the YOLOv8 primary detector (PGIE) and NvDCF tracker.
+1. **Ingestion & AI Inference**: DeepStream dynamically ingests and validates stream availability on startup. Feeds pass through the YOLOv8 primary detector (PGIE) and NvDCF tracker.
 2. **Alert Triggering**: The `InferProbe` executes safety rules. When it identifies consecutive frames of a rider violating the helmet rule, it marks the event and triggers an alert.
 3. **Evidence Extraction**:
    - **Probe Mode**: Captures the raw source frame before the tiler from a GStreamer pad probe (no cropping required).
    - **RTMP Mode**: Captures the frame from the active `MediaMTX` stream cache via a background `PersistentFrameCache` thread (<1ms age).
 4. **Publishing**: Bounding boxes are drawn on the image, the event is appended to `events.jsonl`, and the metadata is pushed to the Redis channel `helmet_violations`.
-5. **Worker Notification**: The `telegram-worker` picks up the message, immediately sends a text notification to Telegram, and follows up by uploading the snapshot.
+5. **Worker Notification**: The `telegram-worker` consumes the Redis event and sends a single consolidated notification containing the photo snapshot and the full alert text as its caption. If the photo is missing, it falls back to a plain text alert.
 6. **Dynamic Control**: The `web-ui` allows users to manage camera configurations on the fly. It updates YAML files in `configs/camera/` and sends REST commands directly to GStreamer (`/stream/add`, `/stream/remove`).
 
 ---
@@ -155,12 +157,13 @@ TELEGRAM_BOT_TOKEN=your_bot_token_here
 TELEGRAM_CHAT_ID=your_chat_id_here
 ```
 
-### Model Compilation
+### Model Compilation & DX Parser Build
 
-Before starting the pipeline, the YOLOv8 model must be compiled into a TensorRT Engine.
+1. **Custom C++ Yolo Parser**: The GStreamer YOLOv8 custom parser is dynamically compiled inside the container on startup via the Makefile (`make compile-parser` target, called automatically by `make run`). No manual compilation is required.
+2. **Model compilation**: Before starting the pipeline, the YOLOv8 model must be exported and compiled into a TensorRT Engine.
 
 ```bash
-# Download and register ONNX model from MLflow registry
+# Download and register the active Production ONNX model from MLflow registry
 make export-onnx
 
 # Compile ONNX to TensorRT engine inside the DeepStream container
@@ -462,31 +465,38 @@ tail -f storage/logs/events.jsonl
 
 ## MLOps Pipeline & Model Lifecycle
 
-The project utilizes **DVC (Data Version Control)** and **MLflow** to coordinate model training and registration. The pipeline consists of the following automated stages defined in `dvc.yaml`:
+The project utilizes **DVC (Data Version Control)** and **MLflow** to coordinate automated model training, validation, quality gating, and registration. The pipeline consists of the following automated stages defined in `dvc.yaml`:
 
 ```mermaid
 graph TD
     A[WebDataset Shards] -->|dvc repro extract| B[Extracted Dataset]
     B -->|dvc repro train| C[YOLOv8 Training & MLflow Log]
-    C -->|dvc repro export| D[ONNX Model Export]
-    D -->|dvc repro compile| E[TensorRT Engine Compilation]
+    C -->|dvc repro evaluate| D[Model Quality Gate & Promotion]
+    D -->|dvc repro export| E[ONNX Model Export]
+    E -->|dvc repro compile| F[TensorRT Engine Compilation]
 ```
 
 ### Pipeline Stages
 
 1. **`extract`**: Extracts raw WebDataset `.tar` shards into a standard YOLO training format folder (`dataset/extracted/yolo_helmet_dataset`).
-2. **`train`**: Trains the YOLOv8 model based on configurations in `params.yaml`, logs metrics and parameter parameters to MLflow tracking server, and automatically registers the trained weights to MLflow Model Registry with the specified alias (e.g. `Production`).
-3. **`export`**: Automatically pulls the designated model version by its alias (e.g. `Production`) from the MLflow registry and converts it into ONNX format, saving it to `apps/vision_service/models/yolov8/yolov8_helmet.onnx`.
-4. **`compile`**: Calls `make build-engine` to run the NVIDIA TensorRT builder container to compile the ONNX model into a GPU-specific FP16 TensorRT engine (`yolov8_helmet.onnx_b1_gpu0_fp16.engine`).
+2. **`train`**: Trains the YOLOv8 model based on hyperparameters in `params.yaml`, logs metrics to the MLflow tracking server, and automatically registers the trained weights to the MLflow Model Registry with the **`Candidate`** alias (preventing unverified models from auto-deploying).
+3. **`evaluate`**: Runs the **Model Quality Gate** ([evaluate_model.py](file:///mmlab_students/storageStudents/nguyenvd/uit_medseg/CS317_MLOps/scripts/evaluate_model.py)). It validates the new Candidate model against the current active `Production` model on the test split using mAP50. If the Candidate outperforms or matches the Production model, it thăng cấp (promotes) the candidate model version to **`Production`** alias in the MLflow Model Registry. Otherwise, the quality gate fails and aborts the deployment.
+4. **`export`**: Automatically pulls the designated model version labeled with the **`Production`** alias from the MLflow registry and converts it into ONNX format, saving it to `apps/vision_service/models/yolov8/yolov8_helmet.onnx`.
+5. **`compile`**: Runs the NVIDIA TensorRT builder container to compile the ONNX model into a GPU-specific FP16 TensorRT engine (`yolov8_helmet.onnx_b1_gpu0_fp16.engine`).
 
 ### Usage
 
-Run the entire pipeline end-to-end:
+Run the entire automated MLOps pipeline (data pull, training, evaluation, and compilation):
 ```bash
-dvc repro
+make mlops-pipeline
 ```
 
-Run specific stages:
+Deploy the newly promoted and compiled model via symlink and safe container restart (zero downtime / hot reload alternative):
+```bash
+make deploy-model
+```
+
+Run specific pipeline stages manually:
 ```bash
 # To only extract data
 dvc repro extract
@@ -494,7 +504,10 @@ dvc repro extract
 # To only train
 dvc repro train
 
-# To export the model from MLflow Registry
+# To run the Model Quality Gate / evaluation manually
+dvc repro evaluate
+
+# To export the production model from MLflow Registry
 dvc repro export
 
 # To compile ONNX to TensorRT
