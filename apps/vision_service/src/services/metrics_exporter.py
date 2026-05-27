@@ -120,6 +120,21 @@ class PrometheusMetricsExporter:
             "system_vram_utilization_pct",
             "NVIDIA GPU VRAM utilization percentage",
         )
+        self.system_cpu_temperature_celsius = Gauge(
+            "system_cpu_temperature_celsius",
+            "Host CPU temperature in Celsius",
+        )
+        self.system_gpu_temperature_celsius = Gauge(
+            "system_gpu_temperature_celsius",
+            "NVIDIA GPU temperature in Celsius",
+        )
+
+        # ── Camera active status ─────────────────────────────────────────────
+        self.camera_active = Gauge(
+            "camera_active",
+            "Camera status: 1 = active/running, 0 = stopped/failed",
+            ["camera_id"],
+        )
 
         # ── Detection events ─────────────────────────────────────────────────
         self.helmet_violation_total = Counter(
@@ -127,6 +142,13 @@ class PrometheusMetricsExporter:
             "Total helmet violation detections per camera",
             ["camera_id"],
         )
+        self.helmet_violation_unique_total = Counter(
+            "helmet_violation_unique_total",
+            "Total unique helmet violation instances per camera using tracking ID",
+            ["camera_id"],
+        )
+        self.seen_violation_tracks = set()
+
         self.detection_objects_total = Counter(
             "detection_objects_total",
             "Total detected objects per label per camera",
@@ -184,6 +206,7 @@ class PrometheusMetricsExporter:
         _set_gauge(self.pipeline_latency_ms.labels(camera_id=camera_id), payload.get("latency_ms"))
         _set_gauge(self.pipeline_rtmp_delay_ms.labels(camera_id=camera_id), payload.get("rtmp_delay_ms"))
         _set_gauge(self.pipeline_event_rate.labels(camera_id=camera_id), payload.get("event_rate"))
+        _set_gauge(self.camera_active.labels(camera_id=camera_id), payload.get("camera_active"))
 
         dropped = payload.get("dropped_frames")
         if dropped is not None and dropped > 0:
@@ -200,6 +223,8 @@ class PrometheusMetricsExporter:
         _set_gauge(self.system_gpu_utilization_pct, payload.get("gpu_utilization_pct"))
         _set_gauge(self.system_ram_utilization_pct, payload.get("ram_utilization_pct"))
         _set_gauge(self.system_vram_utilization_pct, payload.get("vram_utilization_pct"))
+        _set_gauge(self.system_cpu_temperature_celsius, payload.get("cpu_temp_celsius"))
+        _set_gauge(self.system_gpu_temperature_celsius, payload.get("gpu_temp_celsius"))
 
     def update_detection_window_summary(self, payload: Dict[str, Any]) -> None:
         """Handle a 'detection_window_summary' event payload."""
@@ -228,6 +253,14 @@ class PrometheusMetricsExporter:
         self.helmet_violation_total.labels(camera_id=camera_id).inc()
         # Also count no_helmet per camera
         self.detection_objects_total.labels(label="no_helmet", camera_id=camera_id).inc()
+
+        # Track unique violation instances by track_id
+        track_id = payload.get("track_id")
+        if track_id is not None:
+            track_key = (camera_id, int(track_id))
+            if track_key not in self.seen_violation_tracks:
+                self.seen_violation_tracks.add(track_key)
+                self.helmet_violation_unique_total.labels(camera_id=camera_id).inc()
 
 
 # ---------------------------------------------------------------------------
