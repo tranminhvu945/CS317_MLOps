@@ -486,6 +486,18 @@ graph TD
 
 ### Usage
 
+Prepare new incoming data into WebDataset shards:
+```bash
+# format_data_new_yolo -> split_yolo_dataset -> pack_yolo_to_shards
+make prepare-data
+```
+
+Run main retrain pipeline:
+```bash
+# extract -> train -> evaluate -> export -> compile
+make retrain
+```
+
 Run the entire automated MLOps pipeline (data pull, training, evaluation, and compilation):
 ```bash
 make mlops-pipeline
