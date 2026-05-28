@@ -463,8 +463,8 @@ class InferProbe:
             self._cleanup_stale_track_state(camera_id=camera_id, frame_num=frame_num)
             source_id = int(frame_meta.source_id)
             fps = self._update_fps(source_id)
-            if self.settings.visualization.enabled:
-                attach_fps_label(batch_meta, frame_meta, fps)
+            # if self.settings.visualization.enabled:
+            #     attach_fps_label(batch_meta, frame_meta, fps)
 
             # Clear OSD params of all objects in this frame first
             curr_obj = frame_meta.obj_meta_list

@@ -7,6 +7,7 @@ import time
 
 import httpx
 import redis
+import sqlite3
 
 # Configure logging
 logging.basicConfig(
@@ -21,6 +22,101 @@ REDIS_CHANNEL = os.getenv("REDIS_CHANNEL", "helmet_violations")
 
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+
+DB_PATH = "/workspace/storage/violations.db"
+
+
+def init_db() -> None:
+    """Khởi tạo SQLite DB và bảng violations nếu chưa tồn tại."""
+    try:
+        os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS violations (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                event_id TEXT UNIQUE,
+                camera_id TEXT,
+                timestamp REAL,
+                confidence REAL,
+                snapshot_filename TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        conn.commit()
+        conn.close()
+        logger.info("SQLite Database initialized successfully at %s", DB_PATH)
+    except Exception as exc:
+        logger.error("Failed to initialize database: %s", exc)
+
+
+def save_violation_to_db(payload: dict) -> None:
+    """Lưu thông tin vi phạm vào database SQLite."""
+    try:
+        event_id = payload.get("event_id")
+        camera_id = payload.get("camera_id")
+
+        # Backward compatibility với logic phân tích camera_id
+        if not camera_id:
+            sensor_str = None
+            if "sensor" in payload and "id" in payload.get("sensor", {}):
+                sensor_str = payload["sensor"]["id"]
+            elif "sensorStr" in payload:
+                sensor_str = payload["sensorStr"]
+
+            if sensor_str and "camera=" in sensor_str:
+                parts = dict(p.split("=") for p in sensor_str.split("|") if "=" in p)
+                camera_id = parts.get("camera")
+                event_id = event_id or parts.get("event_id")
+            elif sensor_str:
+                camera_id = sensor_str
+
+        if not camera_id:
+            camera_id = "unknown"
+
+        if not event_id:
+            event_id = f"evt_{int(time.time())}"
+
+        timestamp = payload.get("timestamp") or time.time()
+
+        confidence = payload.get("confidence")
+        if confidence is None and isinstance(payload.get("object"), dict):
+            confidence = payload["object"].get("confidence")
+
+        try:
+            if confidence is not None:
+                confidence = float(confidence)
+                if confidence > 1.0:
+                    confidence = confidence / 100.0
+            else:
+                confidence = 0.0
+        except Exception:
+            confidence = 0.0
+
+        snapshot_path = _extract_snapshot_path(payload)
+        snapshot_filename = ""
+        if snapshot_path:
+            snapshot_filename = os.path.basename(snapshot_path)
+
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            INSERT OR REPLACE INTO violations (event_id, camera_id, timestamp, confidence, snapshot_filename)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (event_id, camera_id, timestamp, confidence, snapshot_filename)
+        )
+        conn.commit()
+        conn.close()
+        logger.info(
+            "Saved violation to DB: event_id=%s, camera_id=%s, confidence=%.3f, snapshot=%s",
+            event_id, camera_id, confidence, snapshot_filename
+        )
+    except Exception as exc:
+        logger.error("Failed to save violation to SQLite: %s", exc)
 
 
 def send_text_to_telegram(
@@ -229,6 +325,7 @@ def _connect_redis() -> redis.Redis:
 
 def main() -> None:
     logger.info("[TELEGRAM_DEBUG] worker started")
+    init_db()
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
         logger.error("TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID is missing. Worker will not start properly.")
         raise SystemExit(1)
@@ -286,6 +383,9 @@ def main() -> None:
                     event=payload,
                     label="TEXT_FALLBACK",
                 )
+
+            # Lưu thông tin vi phạm vào database
+            save_violation_to_db(payload)
 
         except json.JSONDecodeError:
             logger.error("Failed to decode JSON payload: %s", str(message.get("data"))[:100])

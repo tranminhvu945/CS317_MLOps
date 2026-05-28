@@ -112,3 +112,4 @@ dataset/yolo_helmet_dataset/
 dataset/TrainYolo/runs/
 dataset/raw/
 dataset/extracted/
+dataset/data_new/

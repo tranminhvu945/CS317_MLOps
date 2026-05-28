@@ -6,7 +6,7 @@ Huấn luyện mô hình YOLOv8 trên dataset đã được giải nén từ DVC
 Sau khi train xong, tự động:
   1. Log file best.pt lên MLflow server dưới dạng artifact.
   2. Đăng ký model vào MLflow Model Registry.
-  3. Gắn alias (Production/Staging) cho version mới nhất.
+  3. Gắn alias Candidate cho version mới nhất (chưa promote Production).
 """
 
 import os
