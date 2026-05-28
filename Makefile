@@ -1,10 +1,15 @@
-.PHONY: run build up down stack-up stack-down sim-check scale-1 scale-2 scale-4 clean mediamtx-up mediamtx-down mediamtx-status publishers-up publishers-down publishers-status monitoring-up monitoring-down monitoring-restart monitoring-status monitoring-logs compile-parser
+.PHONY: run build up down stack-up stack-down sim-check scale-1 scale-2 scale-4 clean mediamtx-up mediamtx-down mediamtx-status publishers-up publishers-down publishers-status monitoring-up monitoring-down monitoring-restart monitoring-status monitoring-logs compile-parser format-data-new split-data-new pack-yolo-shards prepare-data pack-shards retrain dvc-train export-onnx build-engine mlops-pipeline deploy-model mlflow-up mlflow-down mlflow-status
 
 IMAGE  ?= uit_medseg/mlops_thuc:dev
 PYTHON := python3
 COMPOSE_ENV_FILE ?= apps/vision_service/.env
 COMPOSE := docker compose $(if $(wildcard $(COMPOSE_ENV_FILE)),--env-file $(COMPOSE_ENV_FILE),)
 MEDIAMTX_SCRIPT := bash scripts/rtsp_sim_mediamtx.sh
+PREP_RAW_DIR ?= dataset/data_new
+PREP_YOLO_DIR ?= dataset/extracted/yolo_helmet_dataset_new
+PREP_SPLIT_NAME ?= train
+PREP_SEED ?= 42
+PREP_SPLIT_RATIOS ?=
 
 # ── Run ───────────────────────────────────────────────────────────────────────
 
@@ -22,7 +27,7 @@ compile-parser:
 run: compile-parser
 	@echo ">>> Ensuring dependencies are running: redis + mediamtx + telegram-worker..."
 	@$(COMPOSE) up -d redis mediamtx telegram-worker
-	@HOST_GPU_ID=$${HOST_GPU_ID:-7}; \
+	@HOST_GPU_ID=$${HOST_GPU_ID:-0}; \
 	CONTAINER_GPU_ID=$${GPU_ID:-0}; \
 	echo ">>> Starting mlops_thuc (host GPU $$HOST_GPU_ID -> container GPU $$CONTAINER_GPU_ID)..."; \
 	docker rm -f uit_medseg_vision 2>/dev/null || true; \
@@ -120,19 +125,43 @@ scale-4:
 ## Rebuild and restart (no cache)
 rebuild: down build up
 
-# ── Model export & engine build ───────────────────────────────────────────────
+# ── Data preparation pipeline ─────────────────────────────────────────────────
 
-## Pack raw data into WebDataset shards (e.g. make pack-shards NEW_DATA=dataset/data_new)
-pack-shards:
-	@if [ -z "$(NEW_DATA)" ]; then echo "Lỗi: Vui lòng cung cấp biến NEW_DATA (ví dụ: make pack-shards NEW_DATA=dataset/data_new)"; exit 1; fi
-	@echo ">>> Packing raw data from $(NEW_DATA) into shards..."
-	python3 scripts/pack_shards.py --input-dir $(NEW_DATA)
-	@echo ">>> Done! Now run 'dvc add dataset/shards' and 'make dvc-train'."
+## Step 1: Chuẩn hóa data mới về YOLO format tạm (images/train + labels/train)
+## Ví dụ:
+##   make format-data-new PREP_RAW_DIR=dataset/data_new PREP_YOLO_DIR=dataset/extracted/yolo_helmet_dataset_new
+format-data-new:
+	$(PYTHON) scripts/format_data_new_yolo.py \
+		--raw-dir $(PREP_RAW_DIR) \
+		--output-dir $(PREP_YOLO_DIR) \
+		--split-name $(PREP_SPLIT_NAME)
 
-## Train model via DVC pipeline (extract → train → register to MLflow Registry)
-## Tự động khởi động MLflow server (Docker) nếu chưa chạy.
-## MLflow server KHÔNG bị dừng sau khi train để có thể xem kết quả trên UI.
-dvc-train:
+## Step 2: Chia train/val/test từ dataset YOLO tạm
+## Ví dụ:
+##   make split-data-new PREP_SPLIT_RATIOS="0.8 0.1 0.1"
+split-data-new:
+	$(PYTHON) scripts/split_yolo_dataset.py --dataset-dir $(PREP_YOLO_DIR) --seed $(PREP_SEED) $(if $(strip $(PREP_SPLIT_RATIOS)),--split-ratios $(PREP_SPLIT_RATIOS),)
+
+## Step 3: Đóng gói WebDataset shards tại dataset/shards/{train,val,test}/*.tar
+## Ví dụ:
+##   make pack-yolo-shards PREP_YOLO_DIR=dataset/extracted/yolo_helmet_dataset_new PREP_SPLIT_RATIOS="0.8 0.1 0.1"
+pack-yolo-shards:
+	$(PYTHON) scripts/pack_yolo_to_shards.py --input-dir $(PREP_YOLO_DIR) --seed $(PREP_SEED) $(if $(strip $(PREP_SPLIT_RATIOS)),--split-ratios $(PREP_SPLIT_RATIOS),)
+
+## Full data preparation pipeline:
+## format_data_new_yolo -> split_yolo_dataset -> pack_yolo_to_shards
+prepare-data: format-data-new split-data-new pack-yolo-shards
+	@echo ">>> Data preparation done."
+	@echo ">>> Shards output: dataset/shards/{train,val,test}/*.tar"
+
+## Backward-compatible alias
+pack-shards: pack-yolo-shards
+
+# ── Retrain pipeline ──────────────────────────────────────────────────────────
+
+## Run retrain pipeline via DVC:
+## extract -> train -> evaluate -> export -> compile
+retrain:
 	@echo ">>> [1/2] Kiểm tra và khởi động MLflow server..."
 	@if ! docker ps --format '{{.Names}}' | grep -q '^uit_medseg_mlflow$$'; then \
 		echo "    MLflow chưa chạy → khởi động container..."; \
@@ -152,16 +181,21 @@ dvc-train:
 	else \
 		echo "    ✅ MLflow đã đang chạy, dùng server hiện tại."; \
 	fi
-	@echo ">>> [2/2] Running DVC pipeline (extract → train → evaluate → export)..."
-	dvc repro
+	@echo ">>> [2/2] Running DVC retrain pipeline (extract -> train -> evaluate -> export -> compile)..."
+	dvc repro extract train evaluate export compile
 	@echo ">>> Done! Xem kết quả tại MLflow UI: http://localhost:5001"
 	@echo ">>>        Dừng MLflow thủ công nếu cần: make mlflow-down"
+
+## Backward-compatible alias
+dvc-train: retrain
+
+# ── Model export & engine build ───────────────────────────────────────────────
 
 ## Export YOLOv8 best.pt → ONNX (tải tự động từ MLflow Model Registry)
 ## Dùng --alias để chỉ định alias khác (mặc định: Production từ params.yaml)
 ## Ví dụ: make export-onnx ALIAS=Staging
 export-onnx:
-	python3 scripts/export_onnx.py $(if $(ALIAS),--alias $(ALIAS),)
+	$(PYTHON) scripts/export_onnx.py $(if $(ALIAS),--alias $(ALIAS),)
 
 ## Build TensorRT engine from ONNX (inside container)
 build-engine:
@@ -222,9 +256,9 @@ publishers-status:
 
 ## Start Prometheus + Grafana monitoring stack
 monitoring-up:
-	@echo ">>> Starting monitoring stack (Prometheus :9090, Grafana :3000)..."
+	@echo ">>> Starting monitoring stack (Prometheus :9091, Grafana :3005)..."
 	$(COMPOSE) up -d prometheus grafana
-	@echo ">>> Grafana UI  : http://localhost:3000  (admin/admin)"
+	@echo ">>> Grafana UI  : http://localhost:3005  (admin/admin)"
 	@echo ">>> Prometheus  : http://localhost:9090"
 	@echo ">>> Metrics src : http://localhost:9100/metrics"
 
@@ -269,12 +303,12 @@ mlflow-status:
 
 # ── MLOps Automation Pipeline ────────────────────────────────────────────────
 
-## Run the end-to-end MLOps pipeline (data pull -> train -> evaluate -> compile)
+## Run end-to-end retrain pipeline (pull -> extract -> train -> evaluate -> export -> compile)
 mlops-pipeline:
 	@echo ">>> Pulling latest data and pipeline state via DVC..."
 	dvc pull
-	@echo ">>> Executing automated MLOps pipeline stages..."
-	dvc repro
+	@echo ">>> Executing retrain pipeline stages..."
+	$(MAKE) retrain
 
 ## Deploy the active model by updating symlink and restarting the vision container
 deploy-model:
@@ -282,4 +316,3 @@ deploy-model:
 	cd apps/vision_service/models/yolov8 && ln -sf yolov8_helmet.onnx_b1_gpu0_fp16.engine yolov8_helmet_active.engine
 	@echo ">>> Restarting vision-service container to load new engine..."
 	docker restart uit_medseg_vision 2>/dev/null || $(COMPOSE) restart vision-service
-

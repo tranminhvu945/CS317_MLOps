@@ -1,27 +1,46 @@
+import argparse
 import glob
 import shutil
 from pathlib import Path
-
-# Paths
-DATA_NEW_DIR = Path("dataset/data_new")
-OUTPUT_DIR = Path("dataset/extracted/yolo_helmet_dataset_new")
-
-# Chưa sampling, chưa split train/val/test
-# Copy toàn bộ data hợp lệ vào split train
-SPLIT_NAME = "train"
 
 IMAGE_EXTENSIONS = (
     "*.jpg", "*.jpeg", "*.png",
     "*.JPG", "*.JPEG", "*.PNG"
 )
 
+def parse_args():
+    parser = argparse.ArgumentParser(
+        description="Format raw YOLO data mới thành cấu trúc images/labels cho bước split."
+    )
+    parser.add_argument(
+        "--raw-dir",
+        default="dataset/data_new",
+        help="Thư mục data mới (chứa cam*/ và annotations/obj_train_data/).",
+    )
+    parser.add_argument(
+        "--output-dir",
+        default="dataset/extracted/yolo_helmet_dataset_new",
+        help="Thư mục output dataset YOLO tạm trước khi split/shard.",
+    )
+    parser.add_argument(
+        "--split-name",
+        default="train",
+        help="Split đích ban đầu trước khi chạy split_yolo_dataset.py (mặc định: train).",
+    )
+    return parser.parse_args()
+
 
 def main():
+    args = parse_args()
+    data_new_dir = Path(args.raw_dir)
+    output_dir = Path(args.output_dir)
+    split_name = args.split_name
+
     # 1. Scan raw images trong các thư mục cam*
     images = []
 
     for ext in IMAGE_EXTENSIONS:
-        images.extend(glob.glob(str(DATA_NEW_DIR / "cam*" / ext)))
+        images.extend(glob.glob(str(data_new_dir / "cam*" / ext)))
 
     images = sorted(images)
 
@@ -38,7 +57,7 @@ def main():
         filename = img_path.stem
 
         label_path = (
-            DATA_NEW_DIR
+            data_new_dir
             / "annotations"
             / "obj_train_data"
             / cam_folder
@@ -58,19 +77,19 @@ def main():
         return
 
     # 3. Clear output directory
-    if OUTPUT_DIR.exists():
-        print(f"[INFO] Cleaning existing directory: {OUTPUT_DIR}")
-        shutil.rmtree(OUTPUT_DIR)
+    if output_dir.exists():
+        print(f"[INFO] Cleaning existing directory: {output_dir}")
+        shutil.rmtree(output_dir)
 
     # 4. Tạo YOLO folder structure
-    img_dest_dir = OUTPUT_DIR / "images" / SPLIT_NAME
-    lbl_dest_dir = OUTPUT_DIR / "labels" / SPLIT_NAME
+    img_dest_dir = output_dir / "images" / split_name
+    lbl_dest_dir = output_dir / "labels" / split_name
 
     img_dest_dir.mkdir(parents=True, exist_ok=True)
     lbl_dest_dir.mkdir(parents=True, exist_ok=True)
 
     # 5. Copy toàn bộ ảnh-label, không sampling
-    print(f"[INFO] Copying all valid pairs to YOLO format split: {SPLIT_NAME}")
+    print(f"[INFO] Copying all valid pairs to YOLO format split: {split_name}")
 
     for img_path, lbl_path in valid_pairs:
         cam_prefix = img_path.parent.name
@@ -85,12 +104,12 @@ def main():
         shutil.copy2(lbl_path, lbl_dest_dir / new_lbl_name)
 
     print("\n[OK] YOLO formatted dataset saved at:")
-    print(f"  {OUTPUT_DIR}")
+    print(f"  {output_dir}")
 
     print("\nDataset Summary:")
     print(f"  Images: {len(valid_pairs)}")
     print(f"  Labels: {len(valid_pairs)}")
-    print(f"  Split : {SPLIT_NAME}")
+    print(f"  Split : {split_name}")
 
     print("\nOutput layout:")
     print(f"  {img_dest_dir}")
