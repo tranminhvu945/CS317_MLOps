@@ -36,9 +36,12 @@ stages:
 
   # ─── Stage 3.5: Kiểm định chất lượng (Quality Gate) ──────────────────────────
   evaluate:
-    cmd: python3 scripts/evaluate_model.py
+    cmd: python scripts/evaluate_model.py
     deps:
       - scripts/evaluate_model.py
+      - dataset/gold_standard.dvc
+      - dataset/gold_standard.yaml
+      - dataset/gold_standard
       - runs/detect/${train.project}/${train.name}/weights/best.pt
     outs:
       - runs/detect/${train.project}/${train.name}/evaluate_status.json:
@@ -46,7 +49,7 @@ stages:
 
   # ─── Stage 4: Export best.pt sang ONNX ───────────────────────────────────
   export:
-    cmd: python3 scripts/export_onnx.py
+    cmd: python scripts/export_onnx.py
     deps:
       - scripts/export_onnx.py
       - runs/detect/${train.project}/${train.name}/evaluate_status.json
@@ -57,6 +60,9 @@ stages:
           - mlflow.deploy_alias
     outs:
       - apps/vision_service/models/yolov8/yolov8_helmet.onnx:
+          cache: false
+          persist: true
+      - runs/detect/${train.project}/${train.name}/export_status.json:
           cache: false
 
   # ─── Stage 5: Biên dịch ONNX sang TensorRT Engine ────────────────────────

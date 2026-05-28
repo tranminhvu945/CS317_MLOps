@@ -130,10 +130,32 @@ pack-shards:
 	@echo ">>> Done! Now run 'dvc add dataset/shards' and 'make dvc-train'."
 
 ## Train model via DVC pipeline (extract → train → register to MLflow Registry)
+## Tự động khởi động MLflow server (Docker) nếu chưa chạy.
+## MLflow server KHÔNG bị dừng sau khi train để có thể xem kết quả trên UI.
 dvc-train:
-	@echo ">>> Running DVC pipeline (train stages)..."
+	@echo ">>> [1/2] Kiểm tra và khởi động MLflow server..."
+	@if ! docker ps --format '{{.Names}}' | grep -q '^uit_medseg_mlflow$$'; then \
+		echo "    MLflow chưa chạy → khởi động container..."; \
+		$(COMPOSE) up -d mlflow-server; \
+		echo "    Chờ MLflow server sẵn sàng tại http://localhost:5001 ..."; \
+		for i in $$(seq 1 30); do \
+			if curl -sf http://localhost:5001/health > /dev/null 2>&1; then \
+				echo "    ✅ MLflow server đã sẵn sàng (sau $$i giây)."; \
+				break; \
+			fi; \
+			if [ $$i -eq 30 ]; then \
+				echo "    ❌ MLflow server không phản hồi sau 30s. Dừng lại."; \
+				exit 1; \
+			fi; \
+			sleep 1; \
+		done; \
+	else \
+		echo "    ✅ MLflow đã đang chạy, dùng server hiện tại."; \
+	fi
+	@echo ">>> [2/2] Running DVC pipeline (extract → train → evaluate → export)..."
 	dvc repro
-	@echo ">>> Done! Check MLflow UI at http://localhost:5001 for registered model."
+	@echo ">>> Done! Xem kết quả tại MLflow UI: http://localhost:5001"
+	@echo ">>>        Dừng MLflow thủ công nếu cần: make mlflow-down"
 
 ## Export YOLOv8 best.pt → ONNX (tải tự động từ MLflow Model Registry)
 ## Dùng --alias để chỉ định alias khác (mặc định: Production từ params.yaml)
@@ -227,6 +249,23 @@ monitoring-status:
 ## Tail logs from monitoring containers
 monitoring-logs:
 	$(COMPOSE) logs -f --tail=50 prometheus grafana
+
+# ── MLflow server management ─────────────────────────────────────────────────
+
+## Start MLflow server (UI at http://localhost:5001)
+mlflow-up:
+	@echo ">>> Starting MLflow server..."
+	$(COMPOSE) up -d mlflow-server
+	@echo ">>> MLflow UI: http://localhost:5001"
+
+## Stop MLflow server
+mlflow-down:
+	@echo ">>> Stopping MLflow server..."
+	$(COMPOSE) stop mlflow-server
+
+## Show MLflow server status
+mlflow-status:
+	@docker ps --filter name=uit_medseg_mlflow --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}" || echo "(not running)"
 
 # ── MLOps Automation Pipeline ────────────────────────────────────────────────
 

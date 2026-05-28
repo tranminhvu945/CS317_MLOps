@@ -15,6 +15,7 @@ Khởi chạy:
 from __future__ import annotations
 
 import os
+import sqlite3
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional
 
@@ -56,6 +57,44 @@ app.add_middleware(
 http_client = httpx.AsyncClient(timeout=10.0)
 
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+SNAPSHOTS_DIR = PROJECT_ROOT / "storage" / "snapshots"
+SNAPSHOTS_DIR.mkdir(parents=True, exist_ok=True)
+app.mount("/snapshots", StaticFiles(directory=str(SNAPSHOTS_DIR)), name="snapshots")
+
+DB_PATH = PROJECT_ROOT / "storage" / "violations.db"
+
+def get_violations(camera_id: Optional[str] = None, limit: int = 100, offset: int = 0) -> List[Dict[str, Any]]:
+    """Lấy danh sách vi phạm từ SQLite database."""
+    if not DB_PATH.exists():
+        return []
+    
+    violations = []
+    try:
+        conn = sqlite3.connect(str(DB_PATH))
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        
+        query = "SELECT * FROM violations"
+        params = []
+        
+        if camera_id:
+            query += " WHERE camera_id = ?"
+            params.append(camera_id)
+            
+        query += " ORDER BY timestamp DESC LIMIT ? OFFSET ?"
+        params.extend([limit, offset])
+        
+        cursor.execute(query, params)
+        rows = cursor.fetchall()
+        for row in rows:
+            violations.append(dict(row))
+        conn.close()
+    except Exception as exc:
+        print(f"Error fetching violations from DB: {exc}")
+    return violations
+
 
 
 # ─── Schemas ───────────────────────────────────────────────────────────────────
@@ -208,6 +247,12 @@ async def delete_camera(camera_id: str):
         "message": f"Camera '{camera_id}' deleted successfully.",
         "deepstream_api": ds_result,
     }
+
+
+@app.get("/api/violations", response_model=List[Dict])
+async def list_violations(camera_id: Optional[str] = None, limit: int = 100, offset: int = 0):
+    """Lấy danh sách toàn bộ vi phạm đã lưu."""
+    return get_violations(camera_id, limit, offset)
 
 
 @app.get("/api/health")

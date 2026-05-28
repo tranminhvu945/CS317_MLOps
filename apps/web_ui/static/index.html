@@ -98,6 +98,308 @@ main{position:relative;z-index:1;padding:24px 28px;max-width:1600px;margin:0 aut
 @keyframes sOut{to{opacity:0;transform:translateX(16px)}}
 .spin{width:14px;height:14px;border:2px solid rgba(255,255,255,.2);border-top-color:#fff;border-radius:50%;animation:sp .6s linear infinite;display:inline-block}
 @keyframes sp{to{transform:rotate(360deg)}}
+
+/* === TABS NAV === */
+.tabs {
+  display: flex;
+  gap: 10px;
+}
+.tab-btn {
+  background: rgba(255,255,255,.03);
+  border: 1px solid var(--border);
+  color: var(--muted);
+  padding: 8px 18px;
+  border-radius: 20px;
+  font-family: Inter, sans-serif;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all .25s cubic-bezier(0.4, 0, 0.2, 1);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.tab-btn:hover {
+  border-color: rgba(255, 255, 255, 0.2);
+  color: var(--text);
+}
+.tab-btn.active {
+  background: linear-gradient(135deg, var(--accent), var(--accent2));
+  color: #fff;
+  border-color: transparent;
+  box-shadow: 0 0 16px rgba(108,99,255,.35);
+}
+.tab-content {
+  display: none;
+}
+.tab-content.active {
+  display: block;
+  animation: fadeIn 0.4s ease;
+}
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* === VIOLATIONS EXPLORER === */
+.violations-container {
+  display: flex;
+  flex-direction: column;
+  gap: 32px;
+}
+.camera-section {
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 24px;
+  backdrop-filter: blur(10px);
+}
+.camera-section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  padding-bottom: 14px;
+  margin-bottom: 20px;
+}
+.camera-section-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 16px;
+  font-weight: 700;
+  color: #fff;
+}
+.camera-section-title span.cam-badge {
+  background: rgba(108, 99, 255, 0.15);
+  color: #a5a1ff;
+  border: 1px solid rgba(108, 99, 255, 0.25);
+  padding: 2px 8px;
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 700;
+}
+.camera-section-count {
+  font-size: 12px;
+  color: var(--muted);
+  font-weight: 500;
+  background: rgba(255, 255, 255, 0.04);
+  padding: 4px 12px;
+  border-radius: 20px;
+  border: 1px solid rgba(255, 255, 255, 0.05);
+}
+.violations-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 20px;
+}
+.violation-card {
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 12px;
+  overflow: hidden;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  cursor: pointer;
+  position: relative;
+}
+.violation-card:hover {
+  transform: translateY(-4px);
+  border-color: rgba(108, 99, 255, 0.3);
+  box-shadow: 0 12px 24px rgba(108, 99, 255, 0.15);
+  background: rgba(255, 255, 255, 0.04);
+}
+.violation-img-wrapper {
+  position: relative;
+  aspect-ratio: 16/10;
+  background: #090b11;
+  overflow: hidden;
+}
+.violation-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  transition: transform 0.5s ease;
+}
+.violation-card:hover .violation-img {
+  transform: scale(1.06);
+}
+.violation-conf-badge {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  font-size: 10px;
+  font-weight: 800;
+  padding: 3px 8px;
+  border-radius: 6px;
+  backdrop-filter: blur(8px);
+  color: #fff;
+  border: 1px solid rgba(255,255,255,0.15);
+}
+.violation-info {
+  padding: 12px 14px;
+}
+.violation-time {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+.violation-id {
+  font-size: 10px;
+  color: var(--muted);
+  margin-top: 5px;
+  font-family: monospace;
+}
+.empty-camera {
+  text-align: center;
+  padding: 32px 16px;
+  color: var(--muted);
+  font-size: 13px;
+  background: rgba(0, 0, 0, 0.15);
+  border-radius: 12px;
+  border: 1px dashed rgba(255, 255, 255, 0.05);
+}
+
+/* === LIGHTBOX MODAL === */
+.lightbox {
+  position: fixed;
+  inset: 0;
+  background: rgba(10, 13, 20, 0.85);
+  backdrop-filter: blur(25px);
+  z-index: 9999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.3s ease;
+  padding: 24px;
+}
+.lightbox.open {
+  opacity: 1;
+  pointer-events: auto;
+}
+.lightbox-content {
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 20px;
+  max-width: 900px;
+  width: 100%;
+  overflow: hidden;
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.5);
+  transform: scale(0.95);
+  transition: transform 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+  display: flex;
+  flex-direction: column;
+}
+.lightbox.open .lightbox-content {
+  transform: scale(1);
+}
+.lightbox-header {
+  padding: 16px 24px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+.lightbox-body {
+  position: relative;
+  aspect-ratio: 16/9;
+  background: #000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.lightbox-img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+}
+.lightbox-footer {
+  padding: 16px 24px;
+  background: rgba(0, 0, 0, 0.2);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.lightbox-close {
+  background: rgba(255,255,255,0.06);
+  border: 1px solid var(--border);
+  color: #fff;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: all 0.2s;
+  font-weight: 700;
+}
+.lightbox-close:hover {
+  background: var(--danger);
+  border-color: transparent;
+}
+
+/* === PAGINATION === */
+.pagination-ctrl {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 15px;
+  margin-top: 24px;
+  padding-top: 16px;
+  border-top: 1px solid rgba(255, 255, 255, 0.05);
+}
+.pagination-ctrl button {
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--border);
+  color: var(--text);
+  padding: 6px 14px;
+  border-radius: 8px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+.pagination-ctrl button:hover:not(:disabled) {
+  background: var(--accent);
+  border-color: transparent;
+  color: #fff;
+}
+.pagination-ctrl button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.pagination-ctrl span {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+/* === DATE GROUP === */
+.date-group {
+  margin-bottom: 24px;
+}
+.date-group:last-child {
+  margin-bottom: 0;
+}
+.date-group-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  font-weight: 700;
+  color: #a5a1ff;
+  margin-bottom: 14px;
+  padding: 4px 12px;
+  background: rgba(108, 99, 255, 0.08);
+  border-radius: 6px;
+  border-left: 3px solid var(--accent);
+  width: fit-content;
+}
 </style>
 </head>
 <body>
@@ -108,246 +410,240 @@ main{position:relative;z-index:1;padding:24px 28px;max-width:1600px;margin:0 aut
 </header>
 <main>
 
-<!-- ── MASTER AI STREAM CONFIG ── -->
-<div class="ai-hero" style="margin-bottom:28px">
-  <div class="ai-hero-header">
-    <div class="ai-hero-title">
-      <span class="ai-label">YOLOv8 Master Stream (60FPS Canvas Engine)</span>
-      <span style="color:var(--muted);font-size:13px;font-weight:400">Tải duy nhất 1 luồng HLS — Giải quyết triệt để giật lag & Đồng bộ tuyệt đối</span>
+<!-- TAB 1: VIOLATIONS EXPLORER -->
+<div id="tab-violations" class="tab-content active">
+  <div class="violations-header" style="display:flex; justify-content:space-between; align-items:center; margin-bottom:24px;">
+    <div>
+      <h2 style="font-size:20px; font-weight:700; background: linear-gradient(135deg, #fff, var(--muted)); -webkit-background-clip: text; -webkit-text-fill-color: transparent; margin-bottom:4px;">Nhật Ký Ảnh Vi Phạm Theo Camera</h2>
+      <p style="font-size:12px; color:var(--muted)">Xem ảnh chụp vi phạm hệ thống tự động lưu trữ khi gửi cảnh báo Telegram</p>
     </div>
-    <div class="live-tag"><span></span>ULTRA-LOW LOAD</div>
+    <button class="btn-sm" onclick="loadViolations()" style="display:flex; align-items:center; gap:8px;">
+      🔄 Làm mới dữ liệu
+    </button>
   </div>
-  <div class="ai-url-bar">
-    <label>HLS Master URL:</label>
-    <input type="text" id="ai-url" value="/api/hls/vision1/index.m3u8" placeholder="/api/hls/vision1/index.m3u8" />
-    <button class="btn-sm" onclick="initMasterStream()">🚀 Kích hoạt Động cơ Canvas</button>
+  
+  <div id="violations-container" class="violations-container">
+    <div style="text-align:center;padding:40px;color:var(--muted)"><div class="spin"></div><p style="margin-top:12px;font-size:13px">Đang tải...</p></div>
   </div>
-</div>
-
-<!-- Thẻ video ẩn gốc tải luồng duy nhất -->
-<video id="master-ai-video" muted playsinline autoplay style="display:none"></video>
-
-<!-- ── STATS ── -->
-<div class="stats-bar">
-  <div class="stat-card"><div class="stat-icon p">📹</div><div><div class="stat-value" id="s-total">0</div><div class="stat-label">Tổng số camera</div></div></div>
-  <div class="stat-card"><div class="stat-icon t">✅</div><div><div class="stat-value" id="s-active">0</div><div class="stat-label">Đang hoạt động</div></div></div>
-  <div class="stat-card"><div class="stat-icon o">⚡</div><div><div class="stat-value" id="s-fps" style="font-size:16px">Canvas 2D</div><div class="stat-label">Zero-Lag Splitting</div></div></div>
-  <div class="stat-card"><div class="stat-icon r">⚡</div><div><div class="stat-value" id="s-ds" style="font-size:14px">—</div><div class="stat-label">DeepStream API</div></div></div>
-</div>
-
-<!-- ── ADD CAMERA ── -->
-<div class="add-panel">
-  <div class="add-header" onclick="toggleAdd()">
-    <h3>➕ Thêm Camera Mới (Zero Downtime)</h3>
-    <span class="ci" id="ci">+</span>
-  </div>
-  <div class="add-form" id="add-form">
-    <div class="form-row">
-      <div class="fg"><label>Camera ID</label><input type="text" id="f-id" placeholder="cam_005"/></div>
-      <div class="fg"><label>Tên hiển thị</label><input type="text" id="f-name" placeholder="Cổng chính"/></div>
-    </div>
-    <div class="form-row">
-      <div class="fg"><label>Loại luồng</label><select id="f-type"><option value="hls">HLS</option><option value="rtsp">RTSP</option><option value="file">File</option></select></div>
-      <div class="fg"><label>Min Confidence</label><input type="number" id="f-conf" value="0.15" min="0" max="1" step="0.05"/></div>
-    </div>
-    <div class="fg"><label>URI luồng video</label><input type="text" id="f-uri" placeholder="http://127.0.0.1:8888/cam005/index.m3u8"/></div>
-    <div class="form-actions">
-      <button class="btn-primary" id="btn-add" onclick="addCamera()"><span>Thêm Camera & Áp dụng ngay (Zero Downtime)</span></button>
-    </div>
-  </div>
-</div>
-
-<!-- ── UNIFIED AI CAMERA GRID ── -->
-<div class="section-title">Live AI Monitoring Grid (Đồng bộ khung hình tuyệt đối qua GPU Canvas)</div>
-<div class="camera-grid" id="cam-grid">
-  <div style="grid-column:1/-1;text-align:center;padding:40px;color:var(--muted)"><div class="spin"></div><p style="margin-top:12px;font-size:13px">Đang tải...</p></div>
 </div>
 </main>
 
+<!-- LIGHTBOX MODAL -->
+<div id="lightbox" class="lightbox" onclick="closeLightbox(event)">
+  <div class="lightbox-content" onclick="event.stopPropagation()">
+    <div class="lightbox-header">
+      <div style="display:flex; align-items:center; gap:10px;">
+        <span id="lb-cam-name" style="font-weight:700; font-size:15px; color:#fff;">Camera</span>
+        <span id="lb-cam-id" style="font-size:12px; color:var(--muted); font-family:monospace;">cam_id</span>
+      </div>
+      <button class="lightbox-close" onclick="closeLightbox(event)">✕</button>
+    </div>
+    <div class="lightbox-body">
+      <img id="lb-img" class="lightbox-img" src="" alt="Violation Snapshot" />
+    </div>
+    <div class="lightbox-footer">
+      <div id="lb-time" style="font-size:13px; font-weight:500; color:var(--text)">⏰ Thời gian: --</div>
+      <div id="lb-conf" style="font-weight:700; font-size:14px;">🎯 Độ tin cậy: --</div>
+    </div>
+  </div>
+</div>
+
 <script>
 const API='/api';
-let cameras=[];
-let masterHls=null;
-let loopRunning=false;
+const cameraPages = {};
+const itemsPerPage = 8;
 
-function toast(msg,t='i'){
-  const el=document.createElement('div');
-  el.className=`toast ${t}`;
-  const ico=t==='s'?'✅':t==='e'?'❌':'ℹ️';
-  el.innerHTML=`<span>${ico}</span><span>${msg}</span>`;
-  document.getElementById('tc').appendChild(el);
-  setTimeout(()=>{el.style.animation='sOut .3s ease forwards';setTimeout(()=>el.remove(),300);},3500);
+function changePage(camId, newPage) {
+  cameraPages[camId] = newPage;
+  loadViolations();
 }
 
-// ── MASTER CANVAS ENGINE ──
-function initMasterStream(){
-  let url=document.getElementById('ai-url').value.trim();if(!url)return;
-  if(url.includes(':8888/')){
-    url=url.replace(/https?:\/\/[^\/]+:8888\//,'/api/hls/');
-  }
-  const masterVideo=document.getElementById('master-ai-video');
-  if(masterHls){masterHls.destroy();masterHls=null;}
-  
-  toast('Đang nạp duy nhất 1 luồng HLS để trích xuất Canvas...','i');
-  if(Hls.isSupported()){
-    masterHls=new Hls({lowLatencyMode:true,maxBufferLength:12,backBufferLength:12});
-    masterHls.loadSource(url);
-    masterHls.attachMedia(masterVideo);
-    masterHls.on(Hls.Events.MANIFEST_PARSED,()=>{
-      masterVideo.play().catch(()=>{});
-      toast('Luồng AI gốc đã kết nối. Bắt đầu rải khung hình siêu mượt!','s');
-      startCanvasEngine();
-    });
-    masterHls.on(Hls.Events.ERROR,(_,d)=>{
-      if(d.fatal){toast('Không tải được luồng AI Master.','e');}
-    });
-  } else if(masterVideo.canPlayType('application/vnd.apple.mpegurl')){
-    masterVideo.src=url;
-    masterVideo.play().catch(()=>{});
-    startCanvasEngine();
-  }
+function formatDate(ts) {
+  const d = new Date(ts * 1000);
+  const pad = n => String(n).padStart(2, '0');
+  return `${pad(d.getDate())}/${pad(d.getMonth()+1)}/${d.getFullYear()}`;
 }
 
-function startCanvasEngine(){
-  if(loopRunning)return;
-  loopRunning=true;
-  const masterVideo=document.getElementById('master-ai-video');
+async function loadViolations() {
+  const container = document.getElementById('violations-container');
   
-  function renderLoop(){
-    if(masterVideo.readyState>=2 && cameras.length){
-      const vw=masterVideo.videoWidth, vh=masterVideo.videoHeight;
-      if(vw>0 && vh>0){
-        const qw=vw/2, qh=vh/2;
-        cameras.forEach((c,i)=>{
-          if(c.enabled===false)return;
-          const can=document.getElementById(`can-${c.camera_id}`);
-          if(!can)return;
-          
-          // Cập nhật intrinsic size cho canvas chuẩn xác:
-          if(can.width!==qw || can.height!==qh){
-            can.width=qw; can.height=qh;
-          }
-          
-          // Tính toán tọa độ cắt tương ứng góc phần tư (0, 1, 2, 3)
-          let sx=0, sy=0;
-          const idx = i%4;
-          if(idx===1){ sx=qw; sy=0; }
-          else if(idx===2){ sx=0; sy=qh; }
-          else if(idx===3){ sx=qw; sy=qh; }
-          
-          const ctx=can.getContext('2d');
-          ctx.drawImage(masterVideo, sx, sy, qw, qh, 0, 0, qw, qh);
-        });
+  try {
+    const rCam = await fetch(`${API}/cameras`);
+    const activeCams = await rCam.json();
+    
+    // Sắp xếp camera cố định thứ tự theo Camera ID (Alphabetical)
+    activeCams.sort((a, b) => a.camera_id.localeCompare(b.camera_id));
+    
+    const rViolations = await fetch(`${API}/violations?limit=1000`);
+    const violations = await rViolations.json();
+    
+    const grouped = {};
+    activeCams.forEach(c => {
+      grouped[c.camera_id] = {
+        name: c.name || c.camera_id,
+        items: []
+      };
+      // Khởi tạo trang mặc định nếu chưa có
+      if (cameraPages[c.camera_id] === undefined) {
+        cameraPages[c.camera_id] = 1;
       }
+    });
+    
+    violations.forEach(v => {
+      if (!grouped[v.camera_id]) {
+        grouped[v.camera_id] = {
+          name: v.camera_id,
+          items: []
+        };
+        if (cameraPages[v.camera_id] === undefined) {
+          cameraPages[v.camera_id] = 1;
+        }
+      }
+      grouped[v.camera_id].items.push(v);
+    });
+    
+    let html = '';
+    const camIds = Object.keys(grouped);
+    // Sắp xếp camera cố định theo bảng chữ cái (cam_001 -> cam_002 -> cam_003...)
+    camIds.sort((a, b) => a.localeCompare(b));
+    if (!camIds.length) {
+      container.innerHTML = '<div style="text-align:center;padding:60px;color:var(--muted)"><div style="font-size:48px;margin-bottom:12px">🚨</div><p style="font-size:13px">Chưa cấu hình camera nào trong hệ thống.</p></div>';
+      return;
     }
-    requestAnimationFrame(renderLoop);
-  }
-  requestAnimationFrame(renderLoop);
-}
-
-// ── Cameras ──
-async function loadCameras(){
-  try{
-    const r=await fetch(`${API}/cameras`);
-    cameras=await r.json();
-    renderGrid();updateStats();
-  }catch{
-    document.getElementById('cam-grid').innerHTML='<div style="grid-column:1/-1;text-align:center;padding:40px;color:var(--muted)">⚠️ Không thể kết nối API</div>';
-  }
-}
-
-function updateStats(){
-  const total=cameras.length,active=cameras.filter(c=>c.enabled!==false).length;
-  document.getElementById('s-total').textContent=total;
-  document.getElementById('s-active').textContent=active;
-  checkDs();
-}
-
-async function checkDs(){
-  try{await fetch(`${API}/health`);document.getElementById('s-ds').textContent='Online';document.getElementById('s-ds').style.color='var(--accent2)';}
-  catch{document.getElementById('s-ds').textContent='Offline';document.getElementById('s-ds').style.color='var(--danger)';}
-}
-
-function renderGrid(){
-  const g=document.getElementById('cam-grid');
-  if(!cameras.length){g.innerHTML='<div style="grid-column:1/-1;text-align:center;padding:60px;color:var(--muted)"><div style="font-size:48px;margin-bottom:12px">📷</div><div style="font-size:13px">Chưa có camera. Thêm camera ở trên!</div></div>';return;}
-  // Chỉ render lại HTML nếu danh sách thẻ bị thay đổi để tránh reset canvas:
-  const currentIds = Array.from(g.querySelectorAll('.cam-card')).map(x=>x.id.replace('card-','')).join(',');
-  const newIds = cameras.map(c=>c.camera_id).join(',');
-  if(currentIds !== newIds){
-    g.innerHTML=cameras.map((c,i)=>buildCard(c,i)).join('');
-  } else {
-    // Cập nhật class trạng thái enabled/disabled:
-    cameras.forEach(c=>{
-      const card=document.getElementById(`card-${c.camera_id}`);
-      const ov=document.getElementById(`ov-${c.camera_id}`);
-      if(card){
-        card.className=`cam-card${c.enabled!==false?'':' disabled'}`;
-        if(ov) ov.style.display=c.enabled!==false?'none':'flex';
+    
+    camIds.forEach(id => {
+      const cam = grouped[id];
+      // Sắp xếp các vi phạm theo thứ tự thời gian mới nhất lên đầu
+      const items = cam.items.sort((a, b) => b.timestamp - a.timestamp);
+      const totalItems = items.length;
+      const totalPages = Math.ceil(totalItems / itemsPerPage) || 1;
+      
+      // Đảm bảo trang hiện tại hợp lệ
+      if (cameraPages[id] > totalPages) {
+        cameraPages[id] = totalPages;
       }
+      if (cameraPages[id] < 1) {
+        cameraPages[id] = 1;
+      }
+      
+      const page = cameraPages[id];
+      const startIdx = (page - 1) * itemsPerPage;
+      const endIdx = page * itemsPerPage;
+      const pageItems = items.slice(startIdx, endIdx);
+      
+      // Nhóm dữ liệu trong trang theo Từng Ngày
+      const dateGroups = {};
+      pageItems.forEach(item => {
+        const dateStr = formatDate(item.timestamp);
+        if (!dateGroups[dateStr]) {
+          dateGroups[dateStr] = [];
+        }
+        dateGroups[dateStr].push(item);
+      });
+      
+      html += `
+        <div class="camera-section" id="section-${id}">
+          <div class="camera-section-header">
+            <div class="camera-section-title">
+              📷 <span>${cam.name}</span>
+              <span class="cam-badge">${id}</span>
+            </div>
+            <span class="camera-section-count">Tổng vi phạm: <strong>${totalItems}</strong></span>
+          </div>
+      `;
+      
+      if (!totalItems) {
+        html += `
+          <div class="empty-camera">
+            🛡️ Không phát hiện vi phạm nào trên camera này.
+          </div>
+        `;
+      } else {
+        const dates = Object.keys(dateGroups);
+        dates.forEach(dateStr => {
+          html += `
+            <div class="date-group">
+              <div class="date-group-header">📅 Ngày ${dateStr}</div>
+              <div class="violations-grid">
+          `;
+          
+          dateGroups[dateStr].forEach(item => {
+            const confidencePercent = (item.confidence * 100).toFixed(1) + '%';
+            const confVal = item.confidence;
+            const badgeBg = confVal >= 0.8 ? 'rgba(0, 212, 170, 0.85)' : confVal >= 0.5 ? 'rgba(255, 165, 2, 0.85)' : 'rgba(255, 71, 87, 0.85)';
+            const formattedTime = formatTimestamp(item.timestamp);
+            const imgSrc = item.snapshot_filename ? `/snapshots/${item.snapshot_filename}` : '';
+            
+            html += `
+              <div class="violation-card" onclick="openLightbox('${cam.name.replace(/'/g, "\\'")}', '${id}', '${imgSrc}', '${formattedTime}', '${confidencePercent}')">
+                <div class="violation-img-wrapper">
+                  <img class="violation-img" src="${imgSrc}" loading="lazy" onerror="this.src='https://images.unsplash.com/photo-1590250596386-414198379681?auto=format&fit=crop&w=400&q=80'" />
+                  <span class="violation-conf-badge" style="background:${badgeBg};">${confidencePercent}</span>
+                </div>
+                <div class="violation-info">
+                  <div class="violation-time">⏰ ${formattedTime}</div>
+                  <div class="violation-id">🆔 Event ID: <code>${item.event_id}</code></div>
+                </div>
+              </div>
+            `;
+          });
+          
+          html += `
+              </div>
+            </div>
+          `;
+        });
+        
+        // Hiển thị thanh phân trang nếu tổng số trang lớn hơn 1
+        if (totalPages > 1) {
+          html += `
+            <div class="pagination-ctrl">
+              <button onclick="changePage('${id}', ${page - 1})" ${page === 1 ? 'disabled' : ''}>◀ Trang trước</button>
+              <span>Trang ${page} / ${totalPages}</span>
+              <button onclick="changePage('${id}', ${page + 1})" ${page === totalPages ? 'disabled' : ''}>Trang sau ▶</button>
+            </div>
+          `;
+        }
+      }
+      
+      html += '</div>';
     });
+    
+    container.innerHTML = html;
+  } catch (err) {
+    container.innerHTML = `<div style="text-align:center;padding:40px;color:var(--danger)">⚠️ Lỗi tải dữ liệu vi phạm: ${err.message}</div>`;
   }
 }
 
-function buildCard(c,i){
-  const en=c.enabled!==false,id=c.camera_id;
-  return `<div class="cam-card${en?'':' disabled'}" id="card-${id}">
-    <div class="vid-wrap">
-      <canvas id="can-${id}" style="width:100%;height:100%;object-fit:cover;display:block"></canvas>
-      <div class="cam-ov"><span class="type-badge" style="background:linear-gradient(135deg,var(--accent),#8b5cf6);border:none;color:#fff;font-size:9px;letter-spacing:.05em">AI DETECTED</span></div>
-      <div class="no-feed" id="ov-${id}" style="display:${en?'none':'flex'}">⛔<span>Camera đã tắt</span></div>
-    </div>
-    <div class="cam-info">
-      <div><div class="cam-name">${c.name||id}</div><div class="cam-id">${id}</div></div>
-      <div class="cam-ctrls">
-        <button class="tog ${en?'on':'off'}" onclick="toggleCam('${id}',${!en})" title="${en?'Tắt':'Bật'}"><div class="tog-thumb"></div></button>
-        <button class="btn-icon del" onclick="delCam('${id}')" title="Xóa">🗑</button>
-      </div>
-    </div></div>`;
+function formatTimestamp(ts) {
+  if (!ts) return '--:--:--';
+  const d = new Date(ts * 1000);
+  const pad = n => String(n).padStart(2, '0');
+  return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())} ${pad(d.getDate())}/${pad(d.getMonth()+1)}/${d.getFullYear()}`;
 }
 
-async function toggleCam(id,en){
-  const card=document.getElementById(`card-${id}`);if(card)card.style.opacity='.5';
-  try{
-    const r=await fetch(`${API}/cameras/${id}/toggle`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled:en})});
-    const d=await r.json();if(!r.ok)throw new Error(d.detail);
-    toast(`Camera ${id} đã ${en?'bật':'tắt'} — Zero Downtime!`,'s');await loadCameras();
-  }catch(e){toast(`Lỗi: ${e.message}`,'e');if(card)card.style.opacity='';}
+function openLightbox(camName, camId, imgSrc, timeStr, confStr) {
+  document.getElementById('lb-cam-name').textContent = camName;
+  document.getElementById('lb-cam-id').textContent = camId;
+  document.getElementById('lb-img').src = imgSrc;
+  document.getElementById('lb-time').textContent = '⏰ Thời gian: ' + timeStr;
+  document.getElementById('lb-conf').textContent = '🎯 Độ tin cậy: ' + confStr;
+  
+  const confVal = parseFloat(confStr);
+  const lbConf = document.getElementById('lb-conf');
+  lbConf.style.color = confVal >= 80 ? 'var(--accent2)' : confVal >= 50 ? '#ffa502' : 'var(--danger)';
+  
+  document.getElementById('lightbox').classList.add('open');
 }
 
-async function delCam(id){
-  if(!confirm(`Xóa camera "${id}"?`))return;
-  try{
-    const r=await fetch(`${API}/cameras/${id}`,{method:'DELETE'});
-    const d=await r.json();if(!r.ok)throw new Error(d.detail);
-    toast(`Camera ${id} đã xóa.`,'s');await loadCameras();
-  }catch(e){toast(`Lỗi: ${e.message}`,'e');}
+function closeLightbox(e) {
+  document.getElementById('lightbox').classList.remove('open');
 }
 
-function toggleAdd(){const f=document.getElementById('add-form'),ci=document.getElementById('ci');const o=f.classList.toggle('show');ci.classList.toggle('open',o);}
+// Khởi chạy ban đầu
+loadViolations();
 
-async function addCamera(){
-  const btn=document.getElementById('btn-add');
-  const id=document.getElementById('f-id').value.trim(),name=document.getElementById('f-name').value.trim();
-  const type=document.getElementById('f-type').value,uri=document.getElementById('f-uri').value.trim();
-  const conf=parseFloat(document.getElementById('f-conf').value)||0.15;
-  if(!id||!name||!uri){toast('Điền đầy đủ Camera ID, Tên và URI.','e');return;}
-  btn.disabled=true;btn.innerHTML='<span class="spin"></span><span>Đang xử lý...</span>';
-  try{
-    const r=await fetch(`${API}/cameras`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({camera_id:id,name,stream_type:type,uri,enabled:true,min_confidence:conf})});
-    const d=await r.json();if(!r.ok)throw new Error(d.detail);
-    const dsOk=d.deepstream_api?.status_code===200||d.deepstream_api?.status_code===201;
-    toast(`"${name}" đã thêm!${dsOk?' DeepStream nhận luồng ngay lập tức.':' (YAML đã lưu, pipeline chưa chạy)'}`,dsOk?'s':'i');
-    ['f-id','f-name','f-uri'].forEach(x=>document.getElementById(x).value='');
-    await loadCameras();
-  }catch(e){toast(`Lỗi: ${e.message}`,'e');}
-  finally{btn.disabled=false;btn.innerHTML='<span>Thêm Camera & Áp dụng ngay (Zero Downtime)</span>';}
-}
-
-loadCameras().then(()=>{
-  setTimeout(initMasterStream, 1000);
-});
-setInterval(loadCameras,30000);
+setInterval(loadViolations, 10000); // Tự động làm mới danh sách vi phạm mỗi 10 giây
 </script>
 </body>
 </html>

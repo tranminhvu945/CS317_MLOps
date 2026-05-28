@@ -1,0 +1,6 @@
+outs:
+- md5: 13c0ed15c2806a2bc5c1f9c324f83c81.dir
+  size: 66748264
+  nfiles: 601
+  hash: md5
+  path: gold_standard
