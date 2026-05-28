@@ -39,6 +39,8 @@ stages:
     cmd: python3 scripts/evaluate_model.py
     deps:
       - scripts/evaluate_model.py
+      - dataset/gold_standard.yaml
+      - dataset/gold_standard
       - runs/detect/${train.project}/${train.name}/weights/best.pt
     outs:
       - runs/detect/${train.project}/${train.name}/evaluate_status.json:

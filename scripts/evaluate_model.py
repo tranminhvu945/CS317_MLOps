@@ -3,7 +3,10 @@
 evaluate_model.py
 ─────────────────
 Kiểm định chất lượng mô hình (Model Quality Gate) trước khi đưa vào Production.
-So sánh mAP50 trên tập test giữa Candidate model mới và Production model hiện tại.
+So sánh mAP50 trên tập Gold Standard giữa Candidate model mới và Production model hiện tại.
+
+Gold Standard là tập ảnh cố định (300 ảnh, không thuộc tập train/val),
+đảm bảo việc so sánh công bằng và nhất quán giữa các lần train khác nhau.
 """
 
 import os
@@ -34,7 +37,13 @@ def main():
 
     tracking_uri = mlflow_cfg.get("tracking_uri", "http://localhost:5001")
     registry_name = mlflow_cfg.get("registry_name", "YOLOv8_Helmet_Model")
-    dataset_yaml = params.get("dataset", {}).get("yaml", "dataset/dataset.yaml")
+
+    # Dùng Gold Standard dataset cố định để đánh giá Quality Gate
+    # → đảm bảo so sánh công bằng giữa Candidate và Production
+    gold_standard_yaml = "dataset/gold_standard.yaml"
+    if not os.path.exists(gold_standard_yaml):
+        print(f"[ERROR] Không tìm thấy file Gold Standard dataset: {gold_standard_yaml}")
+        sys.exit(1)
 
     device = train_cfg.get("device", [0])
     if isinstance(device, list) and len(device) > 0:
@@ -62,14 +71,15 @@ def main():
     mlflow.set_tracking_uri(tracking_uri)
     client = MlflowClient()
 
-    # 1. Đánh giá Candidate Model
+    # 1. Đánh giá Candidate Model trên Gold Standard
     print(f"[INFO] Đang đánh giá Candidate Model tại: {best_pt_path}")
+    print(f"[INFO] Dùng Gold Standard dataset: {gold_standard_yaml}")
     candidate_yolo = YOLO(best_pt_path)
     candidate_metrics = candidate_yolo.val(
-        data=dataset_yaml, split="test", device=device, verbose=False
+        data=gold_standard_yaml, split="test", device=device, verbose=False
     )
     candidate_map = candidate_metrics.box.map50
-    print(f"[OK]   Candidate mAP50: {candidate_map:.4f}")
+    print(f"[OK]   Candidate mAP50 (Gold Standard): {candidate_map:.4f}")
 
     # 2. Tìm và đánh giá Production Model hiện tại
     prod_map = 0.0
@@ -111,10 +121,10 @@ def main():
         print(f"[INFO] Đang đánh giá Production Model tại: {prod_pt_path}")
         prod_yolo = YOLO(prod_pt_path)
         prod_metrics = prod_yolo.val(
-            data=dataset_yaml, split="test", device=device, verbose=False
+            data=gold_standard_yaml, split="test", device=device, verbose=False
         )
         prod_map = prod_metrics.box.map50
-        print(f"[OK]   Production mAP50: {prod_map:.4f}")
+        print(f"[OK]   Production mAP50 (Gold Standard): {prod_map:.4f}")
     except Exception as e:
         print(f"[INFO] Không có Production Model hoạt động hoặc không tải được: {e}")
         print(
