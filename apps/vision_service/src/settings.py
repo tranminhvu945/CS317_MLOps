@@ -198,6 +198,8 @@ def load_settings() -> RootSettings:
     config_dir = Path(
         os.getenv("CONFIG_DIR", "/workspace/apps/vision_service/configs")
     ).resolve()
+    # Repo root (CS317_MLOps) từ configs/
+    project_root = config_dir.parents[2] if len(config_dir.parents) >= 3 else config_dir.parent
     app_config_path = config_dir / "app.yaml"
 
     raw_app = _read_yaml_file(app_config_path)
@@ -286,6 +288,24 @@ def load_settings() -> RootSettings:
                     ),
                 ),
             },
+        }
+    )
+
+    resolved_logs_dir = _resolve_path(settings.storage.logs_dir, project_root)
+    resolved_events_output = _resolve_path(settings.events.output_file, project_root)
+    resolved_snapshot_dir = _resolve_path(settings.telegram.snapshot_dir, project_root)
+
+    settings = settings.model_copy(
+        update={
+            "storage": settings.storage.model_copy(
+                update={"logs_dir": str(resolved_logs_dir)}
+            ),
+            "events": settings.events.model_copy(
+                update={"output_file": str(resolved_events_output)}
+            ),
+            "telegram": settings.telegram.model_copy(
+                update={"snapshot_dir": str(resolved_snapshot_dir)}
+            ),
         }
     )
 
@@ -378,4 +398,5 @@ def load_settings() -> RootSettings:
     settings = settings.model_copy(update={"cameras": cameras})
 
     ensure_dir(settings.storage.logs_dir)
+    ensure_dir(Path(settings.events.output_file).parent)
     return settings

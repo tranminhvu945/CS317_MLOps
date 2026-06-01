@@ -113,3 +113,4 @@ dataset/TrainYolo/runs/
 dataset/raw/
 dataset/extracted/
 dataset/data_new/
+dataset/data_new_manual_label/

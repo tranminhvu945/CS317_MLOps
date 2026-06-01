@@ -1,4 +1,4 @@
-.PHONY: run build up down stack-up stack-down sim-check scale-1 scale-2 scale-4 clean mediamtx-up mediamtx-down mediamtx-status publishers-up publishers-down publishers-status monitoring-up monitoring-down monitoring-restart monitoring-status monitoring-logs compile-parser format-data-new split-data-new pack-yolo-shards prepare-data pack-shards retrain dvc-train export-onnx build-engine mlops-pipeline deploy-model mlflow-up mlflow-down mlflow-status
+.PHONY: run build up down stack-up stack-down sim-check scale-1 scale-2 scale-4 clean mediamtx-up mediamtx-down mediamtx-status publishers-up publishers-down publishers-status monitoring-up monitoring-down monitoring-restart monitoring-status monitoring-logs compile-parser sync-storage-data format-data-new split-data-new pack-yolo-shards prepare-data pack-shards retrain dvc-train export-onnx build-engine mlops-pipeline deploy-model mlflow-up mlflow-down mlflow-status
 
 IMAGE  ?= uit_medseg/mlops_thuc:dev
 PYTHON := python3
@@ -10,6 +10,11 @@ PREP_YOLO_DIR ?= dataset/extracted/yolo_helmet_dataset_new
 PREP_SPLIT_NAME ?= train
 PREP_SEED ?= 42
 PREP_SPLIT_RATIOS ?=
+PREP_SYNC_FROM_STORAGE ?= 1
+PREP_EVENTS_FILE ?= storage/logs/events.jsonl
+PREP_SNAPSHOTS_DIR ?= storage/snapshots
+PREP_SYNC_MODE ?= replace
+PREP_MIN_CONF ?= 0.0
 
 # ── Run ───────────────────────────────────────────────────────────────────────
 
@@ -127,10 +132,20 @@ rebuild: down build up
 
 # ── Data preparation pipeline ─────────────────────────────────────────────────
 
+## Đồng bộ detect data từ storage (events + snapshots) sang PREP_RAW_DIR
+sync-storage-data:
+	$(PYTHON) scripts/sync_storage_to_data_new.py \
+		--events-file $(PREP_EVENTS_FILE) \
+		--snapshots-dir $(PREP_SNAPSHOTS_DIR) \
+		--output-dir $(PREP_RAW_DIR) \
+		--mode $(PREP_SYNC_MODE) \
+		--min-confidence $(PREP_MIN_CONF)
+
 ## Step 1: Chuẩn hóa data mới về YOLO format tạm (images/train + labels/train)
 ## Ví dụ:
 ##   make format-data-new PREP_RAW_DIR=dataset/data_new PREP_YOLO_DIR=dataset/extracted/yolo_helmet_dataset_new
 format-data-new:
+	$(if $(filter 1 true yes TRUE,$(PREP_SYNC_FROM_STORAGE)),$(MAKE) sync-storage-data,)
 	$(PYTHON) scripts/format_data_new_yolo.py \
 		--raw-dir $(PREP_RAW_DIR) \
 		--output-dir $(PREP_YOLO_DIR) \
