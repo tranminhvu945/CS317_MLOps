@@ -492,6 +492,16 @@ Prepare new incoming data into WebDataset shards:
 make prepare-data
 ```
 
+By default, `prepare-data` now syncs detect outputs from:
+- `storage/logs/events.jsonl` (bbox/class metadata)
+- `storage/snapshots/` (violation snapshots)
+into `dataset/data_new` before formatting/splitting/sharding.
+
+If you want to skip this sync and use an existing manual raw folder:
+```bash
+make prepare-data PREP_SYNC_FROM_STORAGE=0 PREP_RAW_DIR=dataset/data_new
+```
+
 Run main retrain pipeline:
 ```bash
 # extract -> train -> evaluate -> export -> compile

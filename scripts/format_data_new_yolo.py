@@ -72,14 +72,14 @@ def main():
     print(f"[INFO] Matched pairs: {len(valid_pairs)} image-label pairs.")
     print(f"[INFO] Missing labels: {len(missing_labels)} images.")
 
-    if not valid_pairs:
-        print("[ERROR] No valid image-label pairs found.")
-        return
-
     # 3. Clear output directory
     if output_dir.exists():
         print(f"[INFO] Cleaning existing directory: {output_dir}")
         shutil.rmtree(output_dir)
+
+    if not valid_pairs:
+        print("[INFO] Không có ảnh/nhãn mới nào hợp lệ để xử lý.")
+        return
 
     # 4. Tạo YOLO folder structure
     img_dest_dir = output_dir / "images" / split_name

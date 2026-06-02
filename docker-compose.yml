@@ -11,8 +11,8 @@ services:
     ports:
       - "5001:5001"
     volumes:
-      - ${PWD}:/mmlab_students/storageStudents/nguyenvd/uit_medseg/CS317_MLOps
-    working_dir: /mmlab_students/storageStudents/nguyenvd/uit_medseg/CS317_MLOps
+      - ${PWD}:/workspace
+    working_dir: /workspace
 
   redis:
     image: redis:7-alpine
@@ -73,7 +73,7 @@ services:
         reservations:
           devices:
             - driver: nvidia
-              device_ids: ['7']
+              device_ids: ['${GPU_ID:-0}']
               capabilities: [gpu]
 
   telegram-worker:

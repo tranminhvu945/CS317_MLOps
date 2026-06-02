@@ -345,7 +345,7 @@ class RedisAlertPublisher:
             scale_y = snap_h / smux_h if smux_h > 0 else 1.0
 
             if all_objects is not None and isinstance(all_objects, list):
-                logger.info(
+                logger.debug(
                     "[DRAW_BBOX_DEBUG] event_id=%s drawing all_objects count=%d | scaling=(%.3f, %.3f)",
                     event_id, len(all_objects), scale_x, scale_y
                 )
@@ -380,7 +380,7 @@ class RedisAlertPublisher:
                         obj_color = red
                         obj_color_name = "red"
 
-                    logger.info(
+                    logger.debug(
                         "[DRAW_BBOX_DEBUG] event_id=%s object: class_id=%s name=%s color=%s raw_bbox=%s",
                         event_id, obj_class_id, obj_class_name, obj_color_name, obj_bbox
                     )

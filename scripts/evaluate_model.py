@@ -328,6 +328,39 @@ def main():
         },
     }
 
+    # ── 4. Log Quality Gate metrics to MLflow run ─────────────────────────────
+    experiment = client.get_experiment_by_name(train_cfg["project"])
+    run_id = None
+    if experiment:
+        runs = client.search_runs(
+            experiment_ids=[experiment.experiment_id],
+            filter_string=f"tags.`mlflow.runName` = '{train_cfg['name']}'",
+            order_by=["attributes.start_time DESC"],
+            max_results=1,
+        )
+        if runs:
+            run_id = runs[0].info.run_id
+            print(f"\n[INFO] Log Quality Gate metrics to MLflow run_id: {run_id}")
+
+    if run_id:
+        try:
+            with mlflow.start_run(run_id=run_id):
+                mlflow.log_metrics({
+                    "qg_candidate_map50": cand_result["map50"],
+                    "qg_production_map50": prod_result["map50"],
+                    "qg_candidate_no_helmet_recall": cand_nh.get("recall", 0.0),
+                    "qg_production_no_helmet_recall": prod_nh.get("recall", 0.0),
+                    "qg_candidate_no_helmet_precision": cand_nh.get("precision", 0.0),
+                    "qg_production_no_helmet_precision": prod_nh.get("precision", 0.0),
+                    "qg_passed": 1.0 if passed else 0.0,
+                })
+                mlflow.set_tag("qg_status", "accepted" if passed else "rejected")
+                if failures:
+                    mlflow.set_tag("qg_failures", "; ".join(failures))
+                print("[OK]   Đã ghi metrics của Quality Gate vào MLflow run.")
+        except Exception as e:
+            print(f"[WARN] Lỗi khi ghi metrics lên MLflow: {e}")
+
     if passed:
         print("[PASS] ✅ Candidate đạt Quality Gate — tiến hành promote lên Production!")
 

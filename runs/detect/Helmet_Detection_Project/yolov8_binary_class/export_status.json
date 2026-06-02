@@ -1,0 +1,13 @@
+{
+  "status": "exported",
+  "reason": "production_model_exported",
+  "evaluate_reason": "manual_rollback",
+  "promote": true,
+  "model_registry": "YOLOv8_Helmet_Model",
+  "deploy_alias": "Production",
+  "model_version": "7",
+  "model_source": "/workspace/mlartifacts/1/e15390758de04402ae362cb5cb9cf6c4/artifacts/yolo_model",
+  "onnx_path": "apps/vision_service/models/yolov8/yolov8_helmet.onnx",
+  "onnx_size_mb": 11.67,
+  "engine_removed": true
+}

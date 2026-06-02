@@ -1,0 +1,34 @@
+{
+  "status": "accepted",
+  "promote": true,
+  "reason": "candidate_passed_quality_gate",
+  "failures": [],
+  "candidate_map50": 0.6461323694299997,
+  "production_map50": 0.6461323694299997,
+  "candidate_no_helmet_recall": 0.4153846153846154,
+  "production_no_helmet_recall": 0.4153846153846154,
+  "candidate_no_helmet_precision": 0.4657414001931767,
+  "production_no_helmet_precision": 0.4657414001931767,
+  "candidate_no_helmet_fn": null,
+  "production_no_helmet_fn": null,
+  "candidate": {
+    "map50": 0.6461323694299997,
+    "map50_95": 0.47881155507968154,
+    "recall_no_helmet": 0.4153846153846154,
+    "precision_no_helmet": 0.4657414001931767,
+    "map50_no_helmet": 0.38519692098913944
+  },
+  "production": {
+    "version": "8",
+    "map50": 0.6461323694299997,
+    "map50_95": 0.47881155507968154,
+    "recall_no_helmet": 0.4153846153846154,
+    "precision_no_helmet": 0.4657414001931767,
+    "map50_no_helmet": 0.38519692098913944
+  },
+  "thresholds": {
+    "map50_tolerance": 0.01,
+    "precision_tolerance": 0.02
+  },
+  "promoted_version": "8"
+}

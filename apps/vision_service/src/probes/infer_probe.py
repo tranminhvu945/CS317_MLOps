@@ -269,7 +269,7 @@ class InferProbe:
                 return None
             frame_arr = np.array(surface, copy=True, order="C")
             h, w = frame_arr.shape[:2] if frame_arr.ndim >= 2 else (0, 0)
-            logger.info(
+            logger.debug(
                 "[SNAPSHOT_PROBE_DEBUG] "
                 "probe_attach_point=snapshot-capsfilter "
                 "snapshot_shape=%s snapshot_width=%d snapshot_height=%d "
@@ -374,6 +374,7 @@ class InferProbe:
         info: Gst.PadProbeInfo,
         _user_data: object,
     ) -> Gst.PadProbeReturn:
+        logger.debug("[PROBE_DEBUG] snapshot probe callback")
         gst_buffer = info.get_buffer()
         if gst_buffer is None:
             return Gst.PadProbeReturn.OK
@@ -435,7 +436,7 @@ class InferProbe:
         info: Gst.PadProbeInfo,
         _user_data: object,
     ) -> Gst.PadProbeReturn:
-        logger.info("[PROBE_DEBUG] snapshot probe callback called")
+        logger.debug("[PROBE_DEBUG] detection probe callback")
         callback_started_ns = time.perf_counter_ns()
         gst_buffer = info.get_buffer()
         if gst_buffer is None:
@@ -489,8 +490,9 @@ class InferProbe:
             while curr_obj is not None:
                 num_objects += 1
                 curr_obj = curr_obj.next
-            logger.info(
-                f"[PROBE_DEBUG] source_id={source_id} frame_num={frame_num} num_objects={num_objects}"
+            logger.debug(
+                "[PROBE_DEBUG] source_id=%d frame_num=%d num_objects=%d",
+                source_id, frame_num, num_objects,
             )
 
             source_w, source_h = self._get_frame_resolution(frame_meta)
