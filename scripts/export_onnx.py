@@ -105,10 +105,24 @@ def download_model_from_registry(
     tmp_dir = tempfile.mkdtemp(prefix="mlflow_model_")
     print(f"[INFO] Đang tải artifact về: {tmp_dir} ...")
 
-    local_path = mlflow.artifacts.download_artifacts(
-        artifact_uri=source,
-        dst_path=tmp_dir,
-    )
+    # Luôn dùng URI chuẩn models:/ModelName/Version thay vì model_version.source
+    # vì source có thể là ID nội bộ (models:/m-xxxx) không được mlflow.artifacts hỗ trợ.
+    canonical_uri = f"models:/{registry_name}/{ver_num}"
+    print(f"[INFO] Artifact URI (canonical): {canonical_uri}")
+
+    try:
+        local_path = mlflow.artifacts.download_artifacts(
+            artifact_uri=canonical_uri,
+            dst_path=tmp_dir,
+        )
+    except Exception as e:
+        # Fallback: thử tải trực tiếp từ run artifact nếu canonical URI thất bại
+        print(f"[WARN] canonical URI thất bại ({e}), thử fallback qua run_id...")
+        run_id = model_version.run_id
+        local_path = mlflow.artifacts.download_artifacts(
+            run_id=run_id,
+            dst_path=tmp_dir,
+        )
 
     # Tìm file .pt trong thư mục đã tải
     pt_files = list(Path(local_path).parent.glob("**/*.pt")) if Path(local_path).is_file() else list(Path(local_path).glob("**/*.pt"))
