@@ -19,9 +19,12 @@ thành raw dataset format mà format_data_new_yolo.py đang dùng:
 import argparse
 import json
 import shutil
+import os
+import tarfile
+import yaml
 from collections import Counter
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Tuple
+from typing import Dict, Iterable, List, Optional, Tuple, Set
 
 import cv2
 
@@ -59,7 +62,65 @@ def parse_args() -> argparse.Namespace:
         default=0.0,
         help="Bỏ qua event có confidence thấp hơn ngưỡng này",
     )
+    parser.add_argument(
+        "--shards-dir",
+        default="dataset/shards",
+        help="Thư mục chứa các file .tar shards đã đóng gói",
+    )
+    parser.add_argument(
+        "--extracted-dir",
+        default="dataset/extracted/yolo_helmet_dataset",
+        help="Thư mục chứa dataset YOLO đã giải nén",
+    )
     return parser.parse_args()
+
+
+def get_already_sharded_images(shards_dir: Path, extracted_dir: Path) -> Set[str]:
+    already_sharded = set()
+
+    # 1. Thử quét thư mục đã giải nén trước (rất nhanh, tránh đọc tar qua NFS)
+    images_root = extracted_dir / "images"
+
+    # Nếu thư mục images không tồn tại hoặc rỗng → chưa có shard nào,
+    # trả về tập rỗng ngay để pipeline tiếp tục mà không cần dò .tar
+    if not images_root.exists():
+        print("[INFO] Thư mục giải nén chưa tồn tại — bỏ qua bước kiểm tra shard trùng.")
+        return already_sharded
+
+    # Kiểm tra xem có cấu hình extract_limit không
+    extract_limit = 0
+    try:
+        if os.path.exists("params.yaml"):
+            with open("params.yaml", "r") as f:
+                params = yaml.safe_load(f)
+                extract_limit = params.get("sharding", {}).get("extract_limit", 0)
+    except Exception:
+        pass
+
+    # Nếu extract_limit là 0 (giải nén tất cả) → quét nhanh thư mục local
+    if extract_limit == 0:
+        image_extensions = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
+        for img_path in images_root.rglob("*"):
+            if img_path.is_file() and img_path.suffix.lower() in image_extensions:
+                already_sharded.add(img_path.name)
+        if already_sharded:
+            print(f"[INFO] Quét nhanh thư mục đã giải nén: Tìm thấy {len(already_sharded)} ảnh.")
+        else:
+            print("[INFO] Thư mục giải nén tồn tại nhưng không có ảnh — bỏ qua kiểm tra shard trùng.")
+        return already_sharded
+
+    # 2. Fallback: có extract_limit > 0 → chỉ giải nén một phần, phải dò .tar để biết đủ danh sách
+    print("[INFO] extract_limit > 0: Tiến hành quét các file .tar để kiểm tra shard trùng (quá trình này có thể mất vài giây)...")
+    if not shards_dir.exists():
+        return already_sharded
+    for tar_path in shards_dir.rglob("*.tar"):
+        try:
+            with tarfile.open(tar_path, "r") as tar:
+                for name in tar.getnames():
+                    already_sharded.add(os.path.basename(name))
+        except Exception as e:
+            print(f"[WARN] Không thể đọc file shard {tar_path}: {e}")
+    return already_sharded
 
 
 def clamp(value: float, lo: float, hi: float) -> float:
@@ -174,13 +235,13 @@ def write_label_file(label_path: Path, rows: List[Tuple[int, float, float, float
     with label_path.open("w", encoding="utf-8") as f:
         for class_id, cx, cy, bw, bh in rows:
             f.write(f"{class_id} {cx:.6f} {cy:.6f} {bw:.6f} {bh:.6f}\n")
-
-
 def main() -> None:
     args = parse_args()
     events_file = Path(args.events_file)
     snapshots_dir = Path(args.snapshots_dir)
     output_dir = Path(args.output_dir)
+    shards_dir = Path(args.shards_dir)
+    extracted_dir = Path(args.extracted_dir)
 
     if not events_file.exists():
         raise FileNotFoundError(
@@ -189,6 +250,10 @@ def main() -> None:
         )
     if not snapshots_dir.exists():
         raise FileNotFoundError(f"Không thấy snapshots dir: {snapshots_dir}")
+
+    already_sharded = get_already_sharded_images(shards_dir, extracted_dir)
+    if already_sharded:
+        print(f"[INFO] Tìm thấy {len(already_sharded)} ảnh đã được đóng gói trong các file shard (.tar). Sẽ tự động bỏ qua chúng.")
 
     if args.mode == "replace" and output_dir.exists():
         shutil.rmtree(output_dir)
@@ -199,6 +264,7 @@ def main() -> None:
     copied_images = 0
     written_labels = 0
     skipped = 0
+    already_sharded_count = 0
     class_counter: Counter = Counter()
     processed_snapshots = set()
 
@@ -220,6 +286,12 @@ def main() -> None:
         snapshot_path = resolve_snapshot_path(payload, snapshots_dir)
         if snapshot_path is None or not snapshot_path.exists():
             skipped += 1
+            continue
+
+        cam_folder = camera_folder_name(camera_id)
+        expected_sharded_name = f"{cam_folder}_{snapshot_path.name}"
+        if expected_sharded_name in already_sharded:
+            already_sharded_count += 1
             continue
 
         snapshot_key = str(snapshot_path.resolve())
@@ -271,6 +343,7 @@ def main() -> None:
     print("-" * 70)
     print(f"Copied images  : {copied_images}")
     print(f"Written labels : {written_labels}")
+    print(f"Already sharded: {already_sharded_count} (bỏ qua)")
     print(f"Skipped events : {skipped}")
     print(f"Class counts   : {dict(class_counter)}")
     print("=" * 70)

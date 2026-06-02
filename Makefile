@@ -1,6 +1,7 @@
-.PHONY: run build up down stack-up stack-down sim-check scale-1 scale-2 scale-4 clean mediamtx-up mediamtx-down mediamtx-status publishers-up publishers-down publishers-status monitoring-up monitoring-down monitoring-restart monitoring-status monitoring-logs compile-parser sync-storage-data format-data-new split-data-new pack-yolo-shards prepare-data pack-shards retrain dvc-train export-onnx build-engine mlops-pipeline deploy-model mlflow-up mlflow-down mlflow-status
+.PHONY: run build build-mlops-image up down stack-up stack-down sim-check scale-1 scale-2 scale-4 clean mediamtx-up mediamtx-down mediamtx-status publishers-up publishers-down publishers-status monitoring-up monitoring-down monitoring-restart monitoring-status monitoring-logs compile-parser sync-storage-data format-data-new split-data-new pack-yolo-shards prepare-data pack-shards retrain dvc-train export-onnx build-engine rollback mlops-pipeline deploy-model mlflow-up mlflow-down mlflow-status
 
 IMAGE  ?= uit_medseg/mlops_thuc:dev
+MLOPS_TRAIN_IMAGE ?= uit_medseg/mlops_train:dev
 PYTHON := python3
 COMPOSE_ENV_FILE ?= apps/vision_service/.env
 COMPOSE := docker compose $(if $(wildcard $(COMPOSE_ENV_FILE)),--env-file $(COMPOSE_ENV_FILE),)
@@ -29,10 +30,10 @@ compile-parser:
 		$(IMAGE) \
 		make -C /workspace/apps/vision_service/src/deepstream/custom_parser -j$$(nproc) DS_LIB=/workspace/apps/vision_service/libs/deepstream/lib
 
-run: compile-parser
+run: compile-parser monitoring-up
 	@echo ">>> Ensuring dependencies are running: redis + mediamtx + telegram-worker..."
 	@$(COMPOSE) up -d redis mediamtx telegram-worker
-	@HOST_GPU_ID=$${HOST_GPU_ID:-0}; \
+	@HOST_GPU_ID=$${HOST_GPU_ID:-7}; \
 	CONTAINER_GPU_ID=$${GPU_ID:-0}; \
 	echo ">>> Starting mlops_thuc (host GPU $$HOST_GPU_ID -> container GPU $$CONTAINER_GPU_ID)..."; \
 	docker rm -f uit_medseg_vision 2>/dev/null || true; \
@@ -64,8 +65,14 @@ run: compile-parser
 
 # ── Build ─────────────────────────────────────────────────────────────────────
 
-## Build Docker image (with --no-cache to pick up code changes)
-build:
+## Build MLOps training Docker image (containing ultralytics and mlflow)
+build-mlops-image:
+	@echo ">>> Building $(MLOPS_TRAIN_IMAGE)..."
+	docker build -f Dockerfile.mlops -t $(MLOPS_TRAIN_IMAGE) .
+	@echo ">>> Done: $(MLOPS_TRAIN_IMAGE)"
+
+## Build all Docker images (runtime + MLOps training)
+build: build-mlops-image
 	@echo ">>> Building $(IMAGE)..."
 	docker build -f Dockerfile.ds64_glib -t $(IMAGE) .
 	@echo ">>> Done: $(IMAGE)"
@@ -94,6 +101,9 @@ stack-up:
 
 ## Stop all services
 down:
+	@echo ">>> Stopping standalone vision container (if running via make run)..."
+	@docker stop uit_medseg_vision 2>/dev/null && docker rm -f uit_medseg_vision 2>/dev/null || true
+	@echo ">>> Stopping compose stack..."
 	$(COMPOSE) down
 
 ## Stop alert stack only
@@ -139,7 +149,8 @@ sync-storage-data:
 		--snapshots-dir $(PREP_SNAPSHOTS_DIR) \
 		--output-dir $(PREP_RAW_DIR) \
 		--mode $(PREP_SYNC_MODE) \
-		--min-confidence $(PREP_MIN_CONF)
+		--min-confidence $(PREP_MIN_CONF) \
+		--shards-dir dataset/shards
 
 ## Step 1: Chuẩn hóa data mới về YOLO format tạm (images/train + labels/train)
 ## Ví dụ:
@@ -211,6 +222,46 @@ dvc-train: retrain
 ## Ví dụ: make export-onnx ALIAS=Staging
 export-onnx:
 	$(PYTHON) scripts/export_onnx.py $(if $(ALIAS),--alias $(ALIAS),)
+
+## Rollback: tải model version N từ MLflow, export ONNX, build engine, và khởi động lại
+## Bỏ qua Quality Gate check — dùng khi cần khôi phục model cũ khẩn cấp
+## Ví dụ: make rollback VERSION=7
+rollback:
+	@if [ -z "$(VERSION)" ]; then \
+		echo "[ERROR] Vui lòng chỉ định VERSION. Ví dụ: make rollback VERSION=7"; \
+		echo ""; \
+		echo "Danh sách các version có sẵn:"; \
+		sqlite3 mlruns/mlflow.db "SELECT mv.version, rma.alias FROM model_versions mv LEFT JOIN registered_model_aliases rma ON mv.name=rma.name AND mv.version=rma.version WHERE mv.name='YOLOv8_Helmet_Model' ORDER BY CAST(mv.version AS INTEGER) DESC LIMIT 10;" 2>/dev/null || echo "  (Không truy vấn được DB)"; \
+		exit 1; \
+	fi
+	@echo "============================================================"
+	@echo "ROLLBACK → MLflow version $(VERSION)"
+	@echo "============================================================"
+	@echo ">>> [1/3] Export ONNX từ MLflow version $(VERSION) (chạy trong Docker)..."
+	docker run --rm --net=host \
+		--user "$$(id -u):$$(id -g)" \
+		-e HOME=/tmp \
+		-e YOLO_CONFIG_DIR=/tmp \
+		-v $(PWD):/workspace \
+		-w /workspace \
+		-e PYTHONPATH=/workspace \
+		$(MLOPS_TRAIN_IMAGE) \
+		python3 scripts/export_onnx.py --version $(VERSION)
+	@echo ">>> [2/3] Build TensorRT engine..."
+	$(MAKE) build-engine
+	@echo ">>> [3/3] Cập nhật symlink và khởi động lại vision-service..."
+	$(PYTHON) scripts/deploy_model.py --rollback
+	@echo ">>> [4/4] Cập nhật alias 'Production' trong MLflow Registry → version $(VERSION)..."
+	@sqlite3 mlruns/mlflow.db \
+		"INSERT OR REPLACE INTO registered_model_aliases(name, alias, version) VALUES('YOLOv8_Helmet_Model', 'production', '$(VERSION)');" \
+		&& echo "[OK]   MLflow alias 'Production' → version $(VERSION)" \
+		|| echo "[WARN] Không cập nhật được MLflow alias (sqlite3 không có hoặc DB lỗi)"
+	@echo "============================================================"
+	@echo "Rollback version $(VERSION) hoàn tất!"
+	@echo "  Engine  : apps/vision_service/models/yolov8/yolov8_helmet_active.engine"
+	@echo "  MLflow  : YOLOv8_Helmet_Model alias 'Production' → version $(VERSION)"
+	@echo "============================================================"
+
 
 ## Build TensorRT engine from ONNX (inside container)
 build-engine:
@@ -318,16 +369,17 @@ mlflow-status:
 
 # ── MLOps Automation Pipeline ────────────────────────────────────────────────
 
-## Run end-to-end retrain pipeline (pull -> extract -> train -> evaluate -> export -> compile)
+## Run end-to-end MLOps pipeline (pull -> prepare-data -> retrain -> deploy)
 mlops-pipeline:
 	@echo ">>> Pulling latest data and pipeline state via DVC..."
-	dvc pull
+	dvc pull -f
+	@echo ">>> Preparing raw data, formatting, splitting, and packing shards..."
+	$(MAKE) prepare-data
 	@echo ">>> Executing retrain pipeline stages..."
 	$(MAKE) retrain
+	@echo ">>> Running smart deployment logic..."
+	$(MAKE) deploy-model
 
-## Deploy the active model by updating symlink and restarting the vision container
+## Deploy the active model conditionally (using evaluate_status.json Quality Gate)
 deploy-model:
-	@echo ">>> Updating symlink for active engine..."
-	cd apps/vision_service/models/yolov8 && ln -sf yolov8_helmet.onnx_b1_gpu0_fp16.engine yolov8_helmet_active.engine
-	@echo ">>> Restarting vision-service container to load new engine..."
-	docker restart uit_medseg_vision 2>/dev/null || $(COMPOSE) restart vision-service
+	$(PYTHON) scripts/deploy_model.py

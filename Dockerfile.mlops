@@ -1,0 +1,17 @@
+FROM nvcr.io/nvidia/pytorch:22.10-py3
+
+# Xóa cứng toàn bộ các thư mục OpenCV hiện có trong conda site-packages để tránh xung đột circular import
+RUN rm -rf /opt/conda/lib/python3.8/site-packages/cv2* && \
+    rm -rf /opt/conda/lib/python3.8/site-packages/opencv*
+
+# Nâng cấp torch lên 2.1.0 để tránh lỗi 'weights_only' của bản PyTorch 1.13 cũ (dùng bản pre-built wheel cho Python 3.8)
+RUN pip install --no-cache-dir torch==2.1.0 torchvision==0.16.0 --index-url https://download.pytorch.org/whl/cu118
+
+# Cài đặt sạch ultralytics, mlflow và opencv-python-headless
+RUN pip install --no-cache-dir ultralytics mlflow opencv-python-headless
+
+# Hạ cấp protobuf để tương thích với các file protoc được compile sẵn trong container base của NVIDIA
+RUN pip install --no-cache-dir protobuf==3.20.3
+
+# Biến môi trường fallback cho protobuf
+ENV PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION=python

@@ -69,7 +69,8 @@ def collect_pairs(dataset_dir: Path) -> list[tuple[Path, Path]]:
     )
 
     if not all_images:
-        raise ValueError(f"Không có ảnh nào trong: {images_root}")
+        print(f"[INFO] Không có ảnh nào trong: {images_root}")
+        return []
 
     pairs = []
     missing = 0
@@ -192,6 +193,9 @@ def main():
     # 1. Thu thập cặp
     print("\n[1/3] Quét dữ liệu...")
     pairs = collect_pairs(dataset_dir)
+    if not pairs:
+        print("[INFO] Không có dữ liệu mới để phân chia split. Bỏ qua.")
+        return
     total = len(pairs)
 
     # 2. Shuffle

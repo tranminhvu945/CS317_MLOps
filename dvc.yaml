@@ -12,7 +12,7 @@ stages:
 
   # ─── Stage 3: Huấn luyện model YOLO ──────────────────────────────────────
   train:
-    cmd: python dataset/TrainYolo/train_yolo.py
+    cmd: docker run --rm --gpus all --ipc=host --net=host --user "$(id -u):$(id -g)" -e HOME=/tmp -e YOLO_CONFIG_DIR=/tmp -v "$(pwd)":/workspace -w /workspace -e PYTHONPATH=/workspace uit_medseg/mlops_train:dev python3 dataset/TrainYolo/train_yolo.py
     deps:
       - dataset/TrainYolo/train_yolo.py
       - dataset/extracted/yolo_helmet_dataset
@@ -36,10 +36,9 @@ stages:
 
   # ─── Stage 3.5: Kiểm định chất lượng (Quality Gate) ──────────────────────────
   evaluate:
-    cmd: python scripts/evaluate_model.py
+    cmd: docker run --rm --gpus all --ipc=host --net=host --user "$(id -u):$(id -g)" -e HOME=/tmp -e YOLO_CONFIG_DIR=/tmp -v "$(pwd)":/workspace -w /workspace -e PYTHONPATH=/workspace uit_medseg/mlops_train:dev python3 scripts/evaluate_model.py
     deps:
       - scripts/evaluate_model.py
-      - dataset/gold_standard.dvc
       - dataset/gold_standard.yaml
       - dataset/gold_standard
       - runs/detect/${train.project}/${train.name}/weights/best.pt
@@ -49,7 +48,7 @@ stages:
 
   # ─── Stage 4: Export best.pt sang ONNX ───────────────────────────────────
   export:
-    cmd: python scripts/export_onnx.py
+    cmd: docker run --rm --net=host --user "$(id -u):$(id -g)" -e HOME=/tmp -e YOLO_CONFIG_DIR=/tmp -v "$(pwd)":/workspace -w /workspace -e PYTHONPATH=/workspace uit_medseg/mlops_train:dev python3 scripts/export_onnx.py
     deps:
       - scripts/export_onnx.py
       - runs/detect/${train.project}/${train.name}/evaluate_status.json

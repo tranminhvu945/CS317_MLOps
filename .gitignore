@@ -65,6 +65,7 @@ storage/snapshots/.gitkeep
 storage/clips/.gitkeep
 storage/evidence/.gitkeep
 storage/rolling/.gitkeep
+storage_copy/
 
 # ─── PyTorch ────────────────────────────────────────────────────────────────
 .torch/

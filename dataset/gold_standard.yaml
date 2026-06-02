@@ -1,7 +1,7 @@
 # Gold Standard dataset – dùng để đánh giá Quality Gate (evaluate_model.py)
 # 300 ảnh được sample thủ công, không thuộc tập train/val.
 # Toàn bộ ảnh nằm thẳng trong images/ và labels/ (không có subfolder train/val/test).
-path: /mmlab_students/storageStudents/nguyenvd/uit_medseg/CS317_MLOps/dataset/gold_standard
+path: dataset/gold_standard
 
 # YOLO bắt buộc phải có train + val dù chỉ chạy validation.
 # Tất cả 3 split đều trỏ về cùng 1 thư mục (chỉ split="test" được dùng trong evaluate_model.py)

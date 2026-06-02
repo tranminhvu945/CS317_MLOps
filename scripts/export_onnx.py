@@ -49,11 +49,13 @@ def write_export_status(path: Path, payload: dict) -> None:
 def download_model_from_registry(
     tracking_uri: str,
     registry_name: str,
-    alias: str,
+    alias: Optional[str] = None,
+    version: Optional[str] = None,
 ) -> Tuple[str, str, str]:
     """
-    Kết nối MLflow Registry, tìm version có alias cho trước,
+    Kết nối MLflow Registry, tìm version theo alias hoặc version number,
     tải file .pt về thư mục tạm và trả về đường dẫn tuyệt đối.
+    Ưu tiên: version > alias.
     """
     try:
         import mlflow
@@ -66,26 +68,38 @@ def download_model_from_registry(
     mlflow.set_tracking_uri(tracking_uri)
     client = MlflowClient()
 
-    # ── Lấy thông tin version theo alias ─────────────────────────────────────
-    print(f"[INFO] Tìm model '{registry_name}' với alias '{alias}' ...")
-    try:
-        model_version = client.get_model_version_by_alias(
-            name=registry_name,
-            alias=alias,
-        )
-    except Exception as e:
-        print(f"[ERROR] Không tìm thấy model '{registry_name}@{alias}'")
-        print(f"        Chi tiết: {e}")
-        print()
-        print("  Hãy chắc chắn:")
-        print(f"  1. MLflow server đang chạy tại {tracking_uri}")
-        print(f"  2. Đã train model và đăng ký vào Registry (dvc repro / make dvc-train)")
-        print(f"  3. Model được gắn alias '{alias}'")
+    # ── Lấy thông tin version theo version number hoặc alias ─────────────────
+    if version is not None:
+        print(f"[INFO] Tải model '{registry_name}' version {version} (rollback)...")
+        try:
+            model_version = client.get_model_version(name=registry_name, version=str(version))
+        except Exception as e:
+            print(f"[ERROR] Không tìm thấy model '{registry_name}' version {version}")
+            print(f"        Chi tiết: {e}")
+            sys.exit(1)
+    elif alias is not None:
+        print(f"[INFO] Tìm model '{registry_name}' với alias '{alias}' ...")
+        try:
+            model_version = client.get_model_version_by_alias(
+                name=registry_name,
+                alias=alias,
+            )
+        except Exception as e:
+            print(f"[ERROR] Không tìm thấy model '{registry_name}@{alias}'")
+            print(f"        Chi tiết: {e}")
+            print()
+            print("  Hãy chắc chắn:")
+            print(f"  1. MLflow server đang chạy tại {tracking_uri}")
+            print(f"  2. Đã train model và đăng ký vào Registry (dvc repro / make dvc-train)")
+            print(f"  3. Model được gắn alias '{alias}'")
+            sys.exit(1)
+    else:
+        print("[ERROR] Phải chỉ định --alias hoặc --version")
         sys.exit(1)
 
-    version = model_version.version
-    source = model_version.source  # ví dụ: mlflow-artifacts:/1/abc123/artifacts/weights/best.pt
-    print(f"[OK]   Tìm thấy: version={version}, source={source}")
+    ver_num = model_version.version
+    source  = model_version.source
+    print(f"[OK]   Tìm thấy: version={ver_num}, source={source}")
 
     # ── Tải artifact về thư mục tạm ──────────────────────────────────────────
     tmp_dir = tempfile.mkdtemp(prefix="mlflow_model_")
@@ -108,7 +122,7 @@ def download_model_from_registry(
 
     size_mb = os.path.getsize(pt_path) / 1024 / 1024
     print(f"[OK]   Đã tải: {pt_path} ({size_mb:.1f} MB)")
-    return pt_path, str(version), str(source)
+    return pt_path, str(ver_num), str(source)
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
@@ -121,6 +135,12 @@ def main() -> None:
         "--alias",
         default=None,
         help="Alias trong MLflow Registry (mặc định lấy từ params.yaml → mlflow.deploy_alias)",
+    )
+    parser.add_argument(
+        "--version",
+        default=None,
+        metavar="N",
+        help="Version number trong MLflow Registry (dùng để rollback, bỏ qua Quality Gate check)",
     )
     parser.add_argument(
         "--local-pt",
@@ -153,11 +173,14 @@ def main() -> None:
     eval_status_path = run_dir / "evaluate_status.json"
     export_status_path = run_dir / "export_status.json"
 
-    # ── Đọc evaluate_status.json — bỏ qua export nếu Candidate bị reject ────
+    # ── Đọc evaluate_status.json — bỏ qua gate check khi rollback bằng --version ────
+    is_rollback = args.version is not None
     promote = True
-    gate_reason = "evaluate_status_missing"
+    gate_reason = "manual_rollback" if is_rollback else "evaluate_status_missing"
 
-    if eval_status_path.exists():
+    if is_rollback:
+        print(f"[INFO] Chế độ ROLLBACK → version {args.version} — bỏ qua Quality Gate check.")
+    elif eval_status_path.exists():
         try:
             with open(eval_status_path) as f:
                 eval_status = json.load(f)
@@ -211,7 +234,8 @@ def main() -> None:
             SRC_PT, model_version, model_source = download_model_from_registry(
                 tracking_uri=tracking_uri,
                 registry_name=registry_name,
-                alias=deploy_alias,
+                alias=None if is_rollback else deploy_alias,
+                version=args.version,
             )
 
         print(f"\n[INFO] Source .pt: {SRC_PT} ({os.path.getsize(SRC_PT) / 1024 / 1024:.1f} MB)")

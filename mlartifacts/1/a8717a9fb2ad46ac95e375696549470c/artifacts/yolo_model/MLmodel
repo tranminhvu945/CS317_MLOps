@@ -1,0 +1,21 @@
+artifact_path: yolo_model
+flavors:
+  python_function:
+    artifacts:
+      best.pt:
+        path: artifacts/best.pt
+        uri: runs/detect/Helmet_Detection_Project/yolov8_binary_class/weights/best.pt
+    cloudpickle_version: 2.2.0
+    code: null
+    env:
+      conda: conda.yaml
+      virtualenv: python_env.yaml
+    loader_module: mlflow.pyfunc.model
+    python_model: python_model.pkl
+    python_version: 3.8.13
+    streamable: false
+mlflow_version: 2.17.2
+model_size_bytes: 6225126
+model_uuid: 828fa38e9b394890b7aecc1486d05822
+run_id: a8717a9fb2ad46ac95e375696549470c
+utc_time_created: '2026-06-01 08:12:01.957000'

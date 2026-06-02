@@ -86,7 +86,8 @@ def collect_pairs(input_dir: Path) -> list[tuple[str, str]]:
     )
 
     if not all_images:
-        raise ValueError(f"Không tìm thấy ảnh nào trong: {images_root}")
+        print(f"[INFO] Không tìm thấy ảnh nào trong: {images_root}")
+        return []
 
     pairs = []
     missing = 0
@@ -212,6 +213,9 @@ def main():
     # 2. Thu thập toàn bộ cặp ảnh-nhãn
     print("\n[1/3] Quét dữ liệu...")
     pairs = collect_pairs(input_dir)
+    if not pairs:
+        print("[INFO] Không có dữ liệu mới để đóng gói thành shards. Bỏ qua.")
+        return
     total = len(pairs)
 
     # 3. Shuffle
