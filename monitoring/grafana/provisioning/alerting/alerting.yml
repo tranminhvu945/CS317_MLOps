@@ -1,0 +1,103 @@
+apiVersion: 1
+contactPoints:
+  - orgId: 1
+    name: Telegram-Alerts
+    receivers:
+      - uid: telegram_1
+        type: telegram
+        settings:
+          bottoken: "8637044165:AAFSJu09lX1ksqn91ZyKyUM152l2p_RzRew"
+          chatid: "-5199181029"
+          message: |-
+            {{ len .Alerts.Firing }} cảnh báo đang được kích hoạt:
+            {{ range .Alerts.Firing }}
+            🚨 {{ .Annotations.summary }}
+            {{ end }}
+
+policies:
+  - orgId: 1
+    receiver: Telegram-Alerts
+    group_by: ['alertname', 'severity']
+    group_wait: 10s
+    group_interval: 10s
+    repeat_interval: 1m
+
+groups:
+  - orgId: 1
+    name: Hardware Alerts
+    folder: "MLOps Monitoring"
+    interval: 1m
+    rules:
+      - uid: cpu_alert_rule
+        title: "High CPU Usage (tren 90%)"
+        condition: A
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: prometheus
+            model:
+              refId: A
+              expr: system_cpu_utilization_pct > 90
+              intervalMs: 1000
+              maxDataPoints: 43200
+              instant: true
+        noDataState: OK
+        execErrState: Error
+        for: 30s
+        annotations:
+          summary: "Cảnh báo: CPU đang hoạt động trên 90%"
+        labels:
+          severity: warning
+
+      - uid: gpu_alert_rule
+        title: "High GPU Usage (tren 90%)"
+        condition: A
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: prometheus
+            model:
+              refId: A
+              expr: system_gpu_utilization_pct > 90
+              intervalMs: 1000
+              maxDataPoints: 43200
+              instant: true
+        noDataState: OK
+        execErrState: Error
+        for: 30s
+        annotations:
+          summary: "Cảnh báo: GPU đang hoạt động trên 90%"
+        labels:
+          severity: warning
+
+  - orgId: 1
+    name: Pipeline Alerts
+    folder: "MLOps Monitoring"
+    interval: 1m
+    rules:
+      - uid: fps_drop_rule
+        title: "Low Inference FPS (duoi 100)"
+        condition: A
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: prometheus
+            model:
+              refId: A
+              expr: min(pipeline_infer_fps) < 100
+              intervalMs: 1000
+              maxDataPoints: 43200
+              instant: true
+        noDataState: OK
+        execErrState: Error
+        for: 30s
+        annotations:
+          summary: "Khẩn cấp: Tốc độ xử lý Pipeline quá thấp (FPS duoi 100)"
+        labels:
+          severity: critical

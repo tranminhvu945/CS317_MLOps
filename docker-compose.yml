@@ -136,6 +136,11 @@ services:
     ports:
       - "3005:3000"
 
+  dummy_webhook:
+    image: kennethreitz/httpbin
+    container_name: uit_medseg_dummy_webhook
+    restart: always
+
 volumes:
   redis_data:
   prometheus_data:
