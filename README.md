@@ -1,6 +1,23 @@
+<div align="center">
+  <img src="images/logo_uit.png" alt="UIT Logo" width="120" style="margin-right: 50px;"/>
+  <img src="images/logo_cs.png" alt="CS Logo" width="120"/>
+  
+  <h3>TRƯỜNG ĐẠI HỌC CÔNG NGHỆ THÔNG TIN<br>ĐẠI HỌC QUỐC GIA THÀNH PHỐ HỒ CHÍ MINH</h3>
+  <h4>KHOA KHOA HỌC MÁY TÍNH</h4>
+</div>
+
+---
+
 # MLOps — Real-time Helmet Violation Detection
 
-> **MLOps** — Hệ thống MLOps phát hiện vi phạm không đội mũ bảo hiểm theo thời gian thực (Real-time), được thiết kế tối ưu trên nền tảng NVIDIA DeepStream 6.4 và YOLOv8.
+> **Đồ án môn học CS317 (MLOps)** — Hệ thống phát hiện vi phạm không đội mũ bảo hiểm theo thời gian thực (Real-time), được thiết kế tối ưu trên nền tảng NVIDIA DeepStream 6.4 và YOLOv8.
+
+**Nhóm sinh viên thực hiện:**
+- `23520326` - **Đỗ Minh Dũng**
+- `23521555` - **Huỳnh Diên Thục**
+- `23521819` - **Trần Minh Vũ**
+
+---
 
 [![CI](https://img.shields.io/badge/CI-GitHub%20Actions-blue?logo=github-actions)](https://github.com)
 [![Python](https://img.shields.io/badge/Python-3.8+-green?logo=python)](https://www.python.org/)
@@ -48,6 +65,11 @@ MLflow đóng vai trò trung tâm trong việc theo dõi và triển khai mô h�
 - **MLflow Tracking:** Quá trình huấn luyện được thực hiện trong môi trường Docker. Các tham số quan trọng (epoch, batch size, imgsz, optimizer) và các metrics (precision, recall, mAP50) được ghi log chi tiết theo từng epoch. Artifact quan trọng nhất là `best.pt` được lưu vết.
 - **MLflow Registry (Quality Gate):** Checkpoint tốt nhất sau khi train được đăng ký với trạng thái **Candidate**. Script `evaluate_model.py` sẽ tự động so sánh Candidate với model **Production** hiện tại trên tập *Gold Standard*. Nếu Candidate đạt chỉ tiêu, nó sẽ được promote lên Production; nếu không đạt, hệ thống tiếp tục giữ model cũ để đảm bảo độ ổn định khi Inference.
 
+### 2.4. Cơ chế Cảnh báo Bất đồng bộ (Redis & Telegram)
+Để đảm bảo luồng phân tích AI của DeepStream không bao giờ bị nghẽn (block) do mạng chập chờn khi gọi API ra bên ngoài, dự án đã áp dụng kiến trúc tách rời (Decoupling):
+- **Message Broker:** Sử dụng Redis Pub/Sub làm trung gian. Ngay khi có vi phạm, DeepStream chỉ việc đẩy cục dữ liệu (hình ảnh crop, thông tin track ID) vào hàng đợi của Redis với tốc độ cực nhanh rồi đi xử lý frame tiếp theo ngay lập tức.
+- **Telegram Worker & Alerting:** Một service chạy ngầm độc lập có nhiệm vụ "nghe" (subscribe) luồng dữ liệu từ Redis. Khi nhận được dữ liệu, nó sẽ tự động định dạng tin nhắn chi tiết (bao gồm thời điểm vi phạm, tên Camera, Track ID, độ tự tin - confidence) và gửi kèm ảnh chụp người vi phạm thẳng vào Group Telegram của ban quản lý để xử lý kịp thời.
+- **Debounce Logic:** Tích hợp cơ chế lọc thông minh, giúp bỏ qua các track ID đã cảnh báo trong vòng vài giây để tránh tình trạng spam tin nhắn liên tục cho cùng một người vi phạm.
 
 ---
 
