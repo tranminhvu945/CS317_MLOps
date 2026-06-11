@@ -1,8 +1,6 @@
-# UIT-MedSeg MLOps — Helmet Violation Detection
+# MLOps — Real-time Helmet Violation Detection
 
-> **UIT-MedSeg MLOps** — Real-time helmet violation detection for motorcycles, powered by NVIDIA DeepStream 6.4 and YOLOv8.
->
-> Vietnamese: **Hệ thống MLOps phát hiện vi phạm không đội mũ bảo hiểm** — được phát triển bởi UIT MMLab.
+> **MLOps** — Hệ thống MLOps phát hiện vi phạm không đội mũ bảo hiểm theo thời gian thực (Real-time), được thiết kế tối ưu trên nền tảng NVIDIA DeepStream 6.4 và YOLOv8.
 
 [![CI](https://img.shields.io/badge/CI-GitHub%20Actions-blue?logo=github-actions)](https://github.com)
 [![Python](https://img.shields.io/badge/Python-3.8+-green?logo=python)](https://www.python.org/)
@@ -11,589 +9,140 @@
 
 ---
 
-## Table of Contents
+## 1. Tổng quan (Overview)
 
-1. [Overview](#overview)
-2. [Architecture & Data Flow](#architecture--data-flow)
-3. [Quick Start](#quick-start)
-4. [Project Structure](#project-structure)
-5. [Configuration Guide](#configuration-guide)
-6. [Output Format — events.jsonl](#output-format--eventsjsonl)
-7. [RTMP & HLS/WebRTC Streaming](#rtmp--hlswebrtc-streaming)
-8. [Docker Deployment](#docker-deployment)
-9. [MLOps Pipeline & Model Lifecycle](#mlops-pipeline--model-lifecycle)
-10. [Development & Testing](#development--testing)
-11. [Authors & License](#authors--license)
+Đồ án này xây dựng một hệ thống MLOps hoàn chỉnh nhằm phát hiện người đi xe máy không đội mũ bảo hiểm. Hệ thống không chỉ bao gồm quá trình huấn luyện mô hình (Training Pipeline) mà còn tích hợp toàn diện khâu vận hành, triển khai thực tế (Inference Pipeline) với khả năng xử lý video tốc độ cao.
+
+**Công nghệ lõi:**
+- **AI/Computer Vision:** YOLOv8, NVIDIA DeepStream 6.4, TensorRT.
+- **MLOps (Training):** DVC (Data Version Control), MLflow (Tracking & Model Registry).
+- **Control Plane (Vận hành):** FastAPI, Redis (Message Broker).
+- **Observability (Giám sát):** Prometheus, Grafana, Loki, Promtail, Telegram Bot.
 
 ---
 
-## Overview
+## 2. Kiến trúc Hệ thống và MLOps Pipeline
 
-UIT-MedSeg MLOps is a production-ready, GPU-accelerated video analytics pipeline that:
-- Ingests **live streams** (HLS, RTSP) or **video files** (MP4).
-- Runs **real-time object detection** using a custom YOLOv8 Helmet model via DeepStream 6.4.
-- Tracks **motorcycles and riders** across frames with the GPU-accelerated NvDCF multi-object tracker.
-- Classifies safety states directly as `helmet` (Safe_Motorcycle = index 0) or `no_helmet` (Violation_Motorcycle = index 1).
-- Captures annotated **snapshot images** of violations in real-time.
-- Publishes structured alerts asynchronously to a **Redis message broker**.
-- Dispatches **near-instant Telegram notifications** with the violation snapshot.
-- Exposes a central **FastAPI control plane dashboard** for zero-downtime camera management and WHEP stream proxying.
-- Provides containerized **monitoring dashboards** with Prometheus and Grafana.
+### 2.1. Kiến trúc hệ thống
+![Architecture](images/architecture.jpg)
 
-### Key Features & Latency Optimizations
+Luồng xử lý chính bắt đầu từ camera hoặc HLS/RTSP stream. Các frame được đưa vào DeepStream, gom batch bằng nvstreammux, chạy qua YOLOv8 (nvinfer) để phát hiện helmet/no_helmet, sau đó chuyển sang NvDCF Tracker để duy trì track ID. Kết quả được vẽ lên video bằng OSD và xuất ra luồng RTMP/HLS thông qua MediaMTX Relay Server.
 
-| Feature / Component | Detail |
-|---|---|
-| **Framework** | NVIDIA DeepStream 6.4 + Python 3 (pyds 1.1.10) |
-| **Detection Model** | YOLOv8 Helmet model compiled into a FP16 TensorRT engine |
-| **Tracking Element** | NvDCF multi-object tracker (GPU-accelerated) |
-| **Styling & OSD** | Custom `osd_draw.py` style overlay (helmet: green, no_helmet: red) |
-| **Control Plane** | FastAPI (port 8500) for CRUD configurations and HLS/WHEP dashboard |
-| **Zero-Downtime Management** | Add/remove/toggle camera inputs on-the-fly using GStreamer `nvmultiurisrcbin` REST API (port 9091) |
-| **Telemetry & Metrics** | Prometheus metric exporter (port 9100) scraping pipeline latency and FPS |
-| **Redis Broker** | Asynchronous events publication to Redis queue channel (`helmet_violations`) |
-| **Consolidated Alerting** | Telegram worker sends a single photo alert with the violation text as a caption (automatically falls back to plain text if snapshot is missing) |
-| **Persistent Frame Cache** | Background daemon thread (`PersistentFrameCache`) keeps RTMP feed open to capture snapshots under `<1ms` (for `snapshot_source: rtmp`) |
-| **Pre-Tiled Snapshotting** | Pad probe extracts source-specific RGBA frames from pipeline before tiler (for `snapshot_source: probe`) |
-| **Developer DX Automation** | The C++ custom parser is dynamically compiled inside the container on startup; the `pyds` wheel is tracked directly by Git for out-of-the-box portability |
-| **Dynamic Layout Adaptation** | Automatically validates camera stream reachability on startup and disables the tiler (1x1 layout) when only one camera is active |
+Song song với luồng video chính là luồng cảnh báo vi phạm. Khi InferProbe phát hiện một track ID vi phạm đủ số frame liên tiếp, hệ thống tạo sự kiện gồm camera ID, thời điểm, track ID, class_name, confidence, bounding box và ảnh snapshot. Sự kiện được ghi lại, đẩy vào Redis và được Telegram worker gửi đến nhóm quản trị.
+
+### 2.2. MLOps Pipeline
+![Pipeline](images/pipeline.png)
+
+Hệ thống quản lý toàn bộ vòng đời của dữ liệu và mô hình AI thông qua quy trình tự động và các công cụ:
+- **Data Collection:** Dữ liệu từ Kaggle (~70k ảnh) kết hợp với 1000 mẫu thu thập thực tế tại cổng trường (được gán nhãn bằng CVAT). Trong đó, 300 mẫu thực tế được dùng làm tập **Gold Standard** để kiểm định chất lượng (Quality Gate).
+- **DVC (Data Version Control):** Quản lý phiên bản dữ liệu và đóng gói dữ liệu thành WebDataset shards, giúp thuận lợi cho huấn luyện, sao chép và tái lập thí nghiệm.
+- **Export & TensorRT:** Sau khi model YOLOv8 đạt tiêu chuẩn, pipeline sẽ tải model Production mới nhất, chuyển đổi sang ONNX và compile thành TensorRT engine (FP16) để tận dụng sức mạnh GPU.
+- **DeepStream (Inference Deployment):** Đảm nhiệm việc chạy suy luận (inference) trực tiếp tại hiện trường. Thay vì dùng OpenCV thuần, DeepStream sử dụng GStreamer và các plugin tăng tốc GPU (`nvstreammux`, `nvinfer`, `nvtracker`) để xử lý luồng video trôi chảy, tránh nghẽn frame khi áp dụng cho nhiều camera.
+- **Docker & Docker Compose:** Docker hóa toàn bộ môi trường giúp cô lập và tránh xung đột thư viện. Hệ thống sử dụng 2 image riêng biệt (Training Image cho YOLO/MLflow và DeepStream Image cho luồng AI thực tế). Docker Compose đứng ra điều phối vòng đời của các microservices (Redis, MediaMTX, Telegram Worker, Vision Service, API).
+- **Monitoring (Giám sát liên tục):** Đóng vai trò then chốt trong vận hành MLOps. Prometheus và Grafana liên tục thu thập số liệu (FPS, Latency, tài nguyên CPU/GPU). Khi thông lượng giảm hoặc phần cứng bị quá nhiệt, hệ thống chẩn đoán sẽ lưu log và phát cảnh báo kịp thời.
+
+### 2.3. Quản lý mô hình với MLflow
+![MLflow Architecture](images/mlflow.png)
+
+MLflow đóng vai trò trung tâm trong việc theo dõi và triển khai mô hình (Tracking & Registry):
+- **MLflow Tracking:** Quá trình huấn luyện được thực hiện trong môi trường Docker. Các tham số quan trọng (epoch, batch size, imgsz, optimizer) và các metrics (precision, recall, mAP50) được ghi log chi tiết theo từng epoch. Artifact quan trọng nhất là `best.pt` được lưu vết.
+- **MLflow Registry (Quality Gate):** Checkpoint tốt nhất sau khi train được đăng ký với trạng thái **Candidate**. Script `evaluate_model.py` sẽ tự động so sánh Candidate với model **Production** hiện tại trên tập *Gold Standard*. Nếu Candidate đạt chỉ tiêu, nó sẽ được promote lên Production; nếu không đạt, hệ thống tiếp tục giữ model cũ để đảm bảo độ ổn định khi Inference.
+
 
 ---
 
-## Architecture & Data Flow
+## 3. Vận hành Thực tế (Observability & Monitoring)
 
-```mermaid
-graph TD
-    %% Input Sources
-    RTSP[RTSP/HLS Stream] -->|Ingested via nvmultiurisrcbin| DS[DeepStream Pipeline]
-    FILE[Video Files] -->|Ingested via uridecodebin| DS
+Để đảm bảo hệ thống vận hành trơn tru, một stack giám sát được tích hợp:
 
-    %% DeepStream Core Pipeline
-    subgraph DS_Pipeline [DeepStream Core Pipeline]
-        MUX[nvstreammux] --> PGIE[nvinfer: YOLOv8 Engine]
-        PGIE --> TRACK[nvtracker: NvDCF]
-        TRACK --> TILE[nvmultistreamtiler]
-        TILE --> OSD[nvdsosd]
-        OSD --> RTMP[nvv4l2h264enc & RTMP Publish]
-    end
+### 3.1. Giám sát Hiệu suất (Prometheus & Grafana)
+Thông qua Grafana, người quản trị có thể theo dõi thời gian thực (Real-time):
+- **Throughput:** FPS đầu vào (Camera), FPS xử lý AI (DeepStream inference), FPS đầu ra.
+- **Latency:** Đo lường độ trễ từ lúc camera ghi nhận đến khi có kết quả.
+- **System Resource:** Tình trạng CPU, GPU, RAM, VRAM và nhiệt độ để phát hiện tình trạng quá tải.
 
-    %% Snapshot & Probes
-    PGIE -.->|Infer Probe| SNAP_PROBE[Pad Probe: Extract RGBA]
-    SNAP_PROBE -.->|Queue Put| PUB_THREAD[RedisAlertPublisher Thread]
-    RTMP -->|Publish Video| MMTX[MediaMTX Relay Server]
+### 3.2. Cảnh báo Tự động (Grafana Alerting Rules)
+Hệ thống sử dụng **Grafana Unified Alerting** để tự động bắn tin nhắn vào Telegram khi có bất thường:
+- **Rule CPU/GPU** (ví dụ CPU/GPU > 90%): Gửi cảnh báo hệ thống quá tải.
+- **Rule FPS** (ví dụ FPS < 100) : Kích hoạt cảnh báo khẩn cấp khi tốc độ xử lý Pipeline bị suy giảm nghiêm trọng.
+- **Cơ chế:** Các luật được thiết lập `Pending -> Firing` trong `30s` để tránh báo động giả, và tự động nhắc nhở (Repeat interval) mỗi 1 phút thông qua tích hợp Telegram Webhook gốc của Grafana.
 
-    %% RTMP Snapshot fallback
-    MMTX -.->|Persistent Cache| PUB_THREAD
-
-    %% Storage & Broker
-    PUB_THREAD -->|Write Snapshot| SNAP_DIR[storage/snapshots/]
-    PUB_THREAD -->|Append Event| JSONL[storage/logs/events.jsonl]
-    PUB_THREAD -->|Publish JSON Payload| REDIS[(Redis Broker)]
-
-    %% Alerts & Web UI
-    REDIS -->|Subscribed Channel| TG_WORKER[Telegram Alert Worker]
-    TG_WORKER -->|HTTPS API| TG_BOT((Telegram Bot API))
-    TG_BOT -->|Push Notification| TG_USER[End User Telegram Client]
-
-    %% Central Web UI Control Plane
-    WEB_UI[FastAPI Web UI: 8500] -->|CRUD YAML| CAM_DIR[configs/camera/]
-    WEB_UI -->|nvmultiurisrcbin REST: 9091| MUX
-    WEB_UI -->|Proxy WebRTC/WHEP| MMTX
-
-    %% Telemetry
-    EXPORTER[Prometheus Exporter: 9100] -.->|Scrapes metrics| DS_Pipeline
-    PROM[(Prometheus: 9091)] -->|Pull| EXPORTER
-    GRAF[Grafana: 3000] -->|Query| PROM
-```
-
-### Flow Descriptions
-
-1. **Ingestion & AI Inference**: DeepStream dynamically ingests and validates stream availability on startup. Feeds pass through the YOLOv8 primary detector (PGIE) and NvDCF tracker.
-2. **Alert Triggering**: The `InferProbe` executes safety rules. When it identifies consecutive frames of a rider violating the helmet rule, it marks the event and triggers an alert.
-3. **Evidence Extraction**:
-   - **Probe Mode**: Captures the raw source frame before the tiler from a GStreamer pad probe (no cropping required).
-   - **RTMP Mode**: Captures the frame from the active `MediaMTX` stream cache via a background `PersistentFrameCache` thread (<1ms age).
-4. **Publishing**: Bounding boxes are drawn on the image, the event is appended to `events.jsonl`, and the metadata is pushed to the Redis channel `helmet_violations`.
-5. **Worker Notification**: The `telegram-worker` consumes the Redis event and sends a single consolidated notification containing the photo snapshot and the full alert text as its caption. If the photo is missing, it falls back to a plain text alert.
-6. **Dynamic Control**: The `web-ui` allows users to manage camera configurations on the fly. It updates YAML files in `configs/camera/` and sends REST commands directly to GStreamer (`/stream/add`, `/stream/remove`).
+### 3.3. Thu thập Log Tập trung (Loki & Promtail)
+Không cần truy cập SSH hay dùng lệnh `docker logs`, toàn bộ Log của ứng dụng được thu thập theo thời gian thực về Dashboard:
+- **Promtail:** Được thiết lập bằng cơ chế `docker_sd_configs` tự động dò quét (Discover) các container đang chạy qua Docker Socket và gắn nhãn (Label) tên container.
+- **Loki:** Lưu trữ và chỉ mục hóa toàn bộ luồng Log.
+- **Sử dụng:** Trên giao diện Grafana (mục Explore), người dùng chỉ cần nhập LogQL ngắn gọn `{container="uit_medseg_vision"}` để xem hoặc tìm kiếm log của AI Pipeline tức thì.
 
 ---
 
-## Quick Start
+## 4. Giao diện Điều khiển (Web UI & Control Plane API)
 
-### Prerequisites
+Hệ thống tích hợp một Dashboard Web được xây dựng bằng **FastAPI** và **Vanilla JS**, đóng vai trò là Trung tâm điều phối (Serving Orchestrator):
 
-- Ubuntu 20.04 / 22.04 LTS
-- NVIDIA GPU (Pascal architecture or newer) with NVIDIA Drivers
-- Docker + NVIDIA Container Toolkit
-- Python 3.8+ (for local host setup)
+- **Zero-Downtime Scaling:** API `/api/cameras` (POST/PATCH/DELETE) cho phép người dùng thêm luồng camera mới, bật/tắt hoặc xóa camera. API này sẽ chọc thẳng vào luồng xử lý trên GPU của DeepStream để nạp/gỡ luồng video **NGAY LẬP TỨC** mà không cần khởi động lại toàn bộ AI Pipeline.
+- **API Proxy (HLS):** Endpoint `/api/hls` xử lý việc bypass CORS để phát mượt mà hàng tá luồng Livestream trực tiếp trên Web Browser.
+- **History Tracking:** Giao tiếp với database SQLite (ghi nhận bởi Telegram Worker) để cung cấp API `/api/violations`, hiển thị lịch sử vi phạm không đội mũ (Kèm hình ảnh, thời gian, ID và độ tự tin) lên màn hình Dashboard.
 
-### Host Dependencies
+---
 
-If you plan to run local python scripts or tests on the host, install the necessary dependencies:
+## 5. Hướng dẫn cài đặt và chạy Pipeline (How to Run)
 
+### Yêu cầu hệ thống:
+- Hệ điều hành: Linux (Ubuntu 20.04/22.04)
+- Phần cứng: NVIDIA GPU (RTX 30xx, 40xx hoặc T4/A10)
+- Phần mềm: Docker, Docker Compose, NVIDIA Container Toolkit.
+
+### 5.1. Khởi chạy MLOps Training Pipeline
+Quá trình xử lý dữ liệu và Retrain (Re-training loop) được tự động hoá qua DVC:
 ```bash
-# Clone the repository
-git clone https://github.com/tranminhvu945/CS317_MLOps.git
-cd CS317_MLOps
-
-# Install host python dependencies
+# Thiết lập môi trường Python
 pip install -r requirements.txt
-pip install pyds-1.1.10-py3-none-linux_x86_64.whl
+
+# Khởi chạy Pipeline tự động (Extract -> Train -> Evaluate -> Export -> Compile)
+dvc repro
 ```
+*Lưu ý: Bạn có thể theo dõi quá trình huấn luyện trên MLflow UI bằng lệnh `make mlflow-ui`.*
 
-### Environment Configuration
-
-Copy the example environment file and fill in your Telegram Bot credentials and chat information:
+### 5.2. Khởi chạy Inference Pipeline (Triển khai thực tế)
+Toàn bộ hệ thống Production (AI Vision, Redis, Telegram Worker, Web UI, Monitoring) được đóng gói chung vào Docker Compose:
 
 ```bash
-# Copy compose env file to target path
-cp apps/vision_service/.env.example apps/vision_service/.env
+# Terminal 1: Khởi động hệ thống Inference và các service phụ trợ
+make run
+
+# Terminal 2: Mở một terminal mới và chạy lệnh sau để khởi động giao diện Web UI
+make ui
 ```
 
-Open `apps/vision_service/.env` and edit:
-```bash
-TELEGRAM_BOT_TOKEN=your_bot_token_here
-TELEGRAM_CHAT_ID=your_chat_id_here
-```
+### 5.3. Truy cập các hệ thống
+Sau khi khởi động thành công, bạn có thể truy cập các dịch vụ tại:
+- **DeepStream REST API:** Port `9091` (Chỉ dùng nội bộ).
+- **Prometheus:** Port `9090` (Scrape Endpoint).
 
-### Model Compilation & DX Parser Build
+- **Web UI Dashboard:** [http://localhost:8500](http://localhost:8500) (Quản lý Camera, xem Livestream, xem lịch sử vi phạm).
+- **Grafana Dashboard:** [http://localhost:3005](http://localhost:3005) (Tài khoản mặc định: `admin`/`admin`). Tại đây chứa các bảng điều khiển hiệu suất và cấu hình Loki (LogQL).
+- **Xem Video trực tiếp qua VLC:** Mở VLC Media Player, chọn `Media` > `Open Network Stream...` (Phím tắt: `Ctrl + N`) và nhập đường dẫn sau (thay `localhost` bằng IP máy chủ nếu cần):
+  - RTMP: `rtmp://localhost:1935/vision1`
+---
 
-1. **Custom C++ Yolo Parser**: The GStreamer YOLOv8 custom parser is dynamically compiled inside the container on startup via the Makefile (`make compile-parser` target, called automatically by `make run`). No manual compilation is required.
-2. **Model compilation**: Before starting the pipeline, the YOLOv8 model must be exported and compiled into a TensorRT Engine.
+## 6. Bổ sung cho phần Thực hành 
 
-```bash
-# Download and register the active Production ONNX model from MLflow registry
-make export-onnx
+### 6.1. Tích hợp Grafana Alerts & Telegram Webhook (Lab Monitoring)
+Hệ thống giám sát không chỉ dùng để "nhìn", mà có khả năng **chủ động báo động** (Active Alerting):
+- Đã thiết lập các Rule cảnh báo bằng **PromQL** thông qua Grafana Unified Alerting (VD: `min(pipeline_infer_fps) < 100`, `system_cpu_utilization_pct > 90`).
+- Tích hợp thành công Webhook để bắn tin nhắn thẳng vào Group Telegram.
+- **Cấu hình:** Tùy chỉnh `group_wait`, `group_interval` và `repeat_interval: 1m` để đảm bảo cảnh báo được gửi liên tục mỗi phút khi hệ thống có sự cố.
 
-# Compile ONNX to TensorRT engine inside the DeepStream container
-make build-engine
-```
+### 6.2. Tích hợp Centralized Logging với Loki & Promtail (Lab Logging)
+Đã thay thế hoàn toàn việc đọc log thủ công (bằng lệnh `docker logs`) bằng kiến trúc thu thập Log tập trung chuẩn Enterprise:
+- **Promtail:** Được cấu hình tự động dò tìm qua Docker Socket (`docker_sd_configs`), giúp thu gom toàn bộ log của các container đang chạy.
+- **Loki & Grafana:** Tích hợp Datasource tự động (Provisioning). Hỗ trợ truy vấn log thời gian thực cực nhanh bằng LogQL trực tiếp trên giao diện web của Grafana (VD: `{container="uit_medseg_vision"}`).
+
+### 6.3. Xây dựng Control Plane API (Lab Model Serving & API)
+Thay vì chỉ dựng một FastAPI để dự đoán (predict) một tấm ảnh đơn giản, dự án đã đã bổ sung thêm một số API hỗ trợ khả năng quản lý hệ thống:
+- **Serving Orchestrator:** API đóng vai trò là Control Plane, cho phép thêm bớt cấu hình camera ngay trong lúc AI đang chạy (Zero-Downtime Scaling).
+- **Swagger UI:** Tích hợp tự động tại đường dẫn **[http://localhost:8500/docs](http://localhost:8500/docs)** để cung cấp tài liệu API trực quan và cho phép test trực tiếp các endpoint (như `/api/cameras`, `/api/violations`).
+- **Giao tiếp liên dịch vụ:** Giao tiếp mượt mà với cả AI Engine (DeepStream GPU) và Message Broker (Redis) để quản lý trọn vẹn vòng đời của dữ liệu suy luận.
 
 ---
 
-## Project Structure
-
-```
-CS317_MLOps/
-├── .env.example                     # Root environment variable template
-├── .gitignore                       # Git ignore rules
-├── .vscode/                         # VS Code workspace config
-│   ├── launch.json                  # Debug launcher configurations
-│   ├── tasks.json                   # Build tasks
-│   └── settings.json                # VS Code workspace settings
-│
-├── apps/
-│   ├── vision_service/              # Core DeepStream vision service
-│   │   ├── .env.example             # Environment template for Docker Compose
-│   │   ├── configs/                 # YAML configuration files
-│   │   │   ├── app.yaml             # Main configuration file (pipeline, paths, settings)
-│   │   │   ├── infer/               # DeepStream primary GIE config files
-│   │   │   │   ├── pgie_yolov8_helmet.txt
-│   │   │   │   └── pgie_yolov8_helmet_b3.txt
-│   │   │   └── camera/              # Individual camera configuration files
-│   │   │       ├── camera.yaml
-│   │   │       ├── camera_002.yaml
-│   │   │       ├── camera_003.yaml
-│   │   │       └── camera_004.yaml
-│   │   ├── libs/                    # Custom deepstream C headers/libraries
-│   │   ├── models/                  # YOLOv8 ONNX and TensorRT engine files
-│   │   │   └── yolov8/
-│   │   │       ├── yolov8_helmet.onnx
-│   │   │       ├── yolov8_helmet.onnx_b1_gpu0_fp16.engine
-│   │   │       └── labels.txt
-│   │   ├── src/                     # Vision service source code
-│   │   │   ├── main.py              # Application entry point
-│   │   │   ├── app.py               # Main application lifecycle manager
-│   │   │   ├── settings.py          # Pydantic settings schema loader
-│   │   │   ├── logger.py            # Logger initialization
-│   │   │   ├── domain/              # Pydantic data schemas
-│   │   │   │   └── camera_schema.py # Camera schema validation
-│   │   │   ├── pipeline/            # GStreamer pipeline builders & modules
-│   │   │   │   ├── builder.py       # Pipeline construction logic
-│   │   │   │   ├── source_file.py   # File-based input source
-│   │   │   │   ├── source_hls.py    # RTSP/HLS stream input source
-│   │   │   │   ├── infer.py         # Primary nvinfer element creation
-│   │   │   │   ├── tracker.py       # NvMultiObjectTracker element creation
-│   │   │   │   ├── tiler.py         # Multi-stream tiling (nvmultistreamtiler)
-│   │   │   │   ├── osd.py           # On-screen display element creation
-│   │   │   │   ├── osd_draw.py      # Custom drawing helpers (green/red styling)
-│   │   │   │   ├── rtmp_output.py   # RTMP streaming output chain
-│   │   │   │   ├── rtsp_output.py   # RTSP streaming output chain
-│   │   │   │   ├── bus_handler.py   # GstBus message loop and loop-playback handler
-│   │   │   │   └── frame_monitor.py # Ingestion rate monitor
-│   │   │   ├── probes/              # GStreamer metadata probes
-│   │   │   │   ├── infer_probe.py   # Detection classification, OSD styling, violation detection
-│   │   │   │   ├── msg_broker_probe.py # Message broker probe integration
-│   │   │   │   ├── runtime_metrics_probe.py # Track FPS, queue levels, and export to Prometheus
-│   │   │   │   └── stage_latency_probe.py   # Measure element-to-element latency metrics
-│   │   │   └── services/            # Background worker threads
-│   │   │       ├── event_publisher.py       # JSONL writer (events.jsonl)
-│   │   │       ├── metrics_exporter.py      # Prometheus client exporter port
-│   │   │       └── redis_alert_publisher.py # Queue event handler, snapshot extraction, Redis publisher
-│   │   └── tests/
-│   │       ├── conftest.py          # Pytest conftest fixtures
-│   │       └── unit/                # Unit test suites
-│   │           ├── test_redis_alert_publisher.py
-│   │           ├── test_settings_telegram.py
-│   │           └── test_telegram_worker.py
-│   │
-│   ├── telegram_worker/             # Async Telegram notification service
-│   │   ├── Dockerfile               # Production image for Telegram worker
-│   │   ├── main.py                  # Redis subscriber & Telegram API dispatcher
-│   │   └── requirements.txt         # Pip packages for worker
-│   │
-│   └── web_ui/                      # Control plane dashboard
-│       ├── app.py                   # Central FastAPI web application
-│       ├── camera_config.py         # YAML camera config reader/writer
-│       └── static/                  # HTML/JS dashboard interface (index.html, etc.)
-│
-├── storage/                         # Generated outputs (ignored by Git)
-│   ├── logs/
-│   │   └── events.jsonl             # Local structured JSONL logs
-│   ├── snapshots/                   # JPEG snapshots of violations
-│   └── rolling/                     # Metrics rolling files
-│
-├── monitoring/                      # Telemetry dashboards configuration
-│   ├── prometheus/                  # Prometheus scraping configuration
-│   └── grafana/                     # Grafana dashboards & datasources
-│
-├── Dockerfile.ds64_glib             # Main container configuration for DeepStream
-├── Dockerfile.mlflow                # Container configuration for MLflow server
-├── docker-compose.yml               # Complete system service definitions
-├── Makefile                         # Unified command interface
-├── dvc.yaml                         # DVC pipeline stages
-├── dvc.lock                         # Locked version inputs/outputs
-├── params.yaml                      # Model training & deployment hyperparameters
-├── requirements.txt                 # Host Python package dependencies
-├── scripts/                         # Development & pipeline scripting
-│   ├── build_engine.sh              # TensorRT compiler script
-│   ├── export_onnx.py               # MLflow registry ONNX model exporter
-│   ├── pack_shards.py               # WebDataset shard packer
-│   └── extract_shards.py            # WebDataset shard extractor
-└── README.md                        # Project documentation (this file)
-```
-
----
-
-## Configuration Guide
-
-The primary configuration of the DeepStream pipeline is managed via `apps/vision_service/configs/app.yaml`. Camera feeds are managed separately in `apps/vision_service/configs/camera/*.yaml`.
-
-### General Configuration Parameters (`app.yaml`)
-
-| Section | Parameter | Type | Description |
-|---|---|---|---|
-| **app** | `gpu_id` | Integer | GPU Index to use (default: `0`) |
-| | `log_level` | String | Logging level (`DEBUG`, `INFO`, `WARNING`, `ERROR`) |
-| **storage** | `logs_dir` | String | Target directory to write local logs |
-| **events** | `output_file` | String | Absolute or relative path to append JSONL event logs |
-| **streams** | `scan_camera_dir` | String | Path to search for individual camera YAML config files |
-| **pipeline** | `streammux_width` | Integer | Resolution width for the stream multiplexer |
-| | `streammux_height` | Integer | Resolution height for the stream multiplexer |
-| | `max_sources` | Integer | Maximum concurrent camera inputs allowed in the pipeline |
-| | `sink` | String | Active GStreamer output sink (`fake`, `display`, `rtsp`, `rtmp`) |
-| **tiler** | `enabled` | Boolean | Whether to tile multiple feeds into a grid layout |
-| | `width` / `height` | Integer | Resolution grid boundaries of the tiled window |
-| **infer** | `config_file` | String | Path to the nvinfer PGIE config file |
-| | `summary_interval_sec`| Float | Interval to output window detection stats |
-| **visualization** | `display_text` | Boolean | Toggle text label overlays on the screen output |
-| | `display_bbox` | Boolean | Toggle bounding box drawings on the screen output |
-| **rtmp** | `enabled` | Boolean | Toggle RTMP publishing output |
-| | `location` | String | RTMP server URL (e.g. `rtmp://mediamtx:1935/vision1`) |
-| **tracker** | `enabled` | Boolean | Toggle NvMultiObjectTracker component |
-| | `ll_config_file` | String | Config file path for the tracker |
-| **metrics** | `enabled` | Boolean | Expose pipeline status over Prometheus |
-| | `port` | Integer | HTTP port for Prometheus scrape endpoint |
-| **telegram** | `enabled` | Boolean | Toggle alerts publishing to Redis queue |
-| | `snapshot_source` | String | Snapshot source (`probe` for GStreamer pad, `rtmp` for MediaMTX cache) |
-| | `cooldown_sec` | Float | Delay in seconds between notifications per camera to avoid spam |
-| | `min_consecutive_no_helmet_frames` | Integer | Required consecutive violation detections before alerting |
-
-### Camera Ingestion Configuration (`camera/*.yaml`)
-
-Each camera input is configured as follows:
-
-```yaml
-camera_id: cam_001
-name: cong_1
-enabled: true
-
-stream:
-  type: hls                 # Ingestion stream type: hls, rtsp, or file
-  uri: "http://mediamtx:8888/cam01/index.m3u8"
-  reconnect_interval_sec: 10
-  timeout_sec: 15
-  decoder_drop_frame_interval: 0
-
-detection:
-  min_confidence: 0.5
-  roi:
-    enabled: false          # Set to true to filter violations outside a polygon region
-    polygon:
-      - [40, 120]
-      - [400, 100]
-      - [500, 300]
-      - [40, 550]
-```
-
----
-
-## Output Format — events.jsonl
-
-Every violation trigger is saved on the host filesystem under `storage/logs/events.jsonl`. Each entry represents a line-separated JSON document:
-
-```json
-{
-  "event_type": "helmet_violation",
-  "timestamp": "2026-05-25T08:46:12.123456+00:00",
-  "payload": {
-    "event_id": "violation_cong_1_track:102_1716301234000",
-    "camera_id": "cong_1",
-    "track_id": 102,
-    "class_id": 1,
-    "class_name": "no_helmet",
-    "confidence": 0.892,
-    "frame_num": 1420,
-    "bbox": [102.5, 245.0, 64.0, 92.5]
-  }
-}
-```
-
-Every interval configured by `infer.summary_interval_sec`, a summary statistic event is logged:
-
-```json
-{
-  "event_type": "detection_window_summary",
-  "timestamp": "2026-05-25T08:46:17.123456+00:00",
-  "payload": {
-    "window_sec": 5.0,
-    "frames": 150,
-    "objects": 450,
-    "counts_by_label": {
-      "helmet #102": 150,
-      "no_helmet #103": 89
-    },
-    "buffer_rate": 30.0,
-    "probe_callback_ms": {
-      "avg": 0.8124,
-      "p95": 1.4502,
-      "max": 3.125
-    }
-  }
-}
-```
-
----
-
-## RTMP & HLS/WebRTC Streaming
-
-DeepStream processes video frames, overlays bounding boxes and label metadata, and publishes the combined stream to the `MediaMTX` server via RTMP.
-
-### 1. Ingesting Simulated Feed (Development)
-
-To run without a physical RTSP/HLS camera, run a simulation script that loops an input file to MediaMTX:
-
-```bash
-# Start MediaMTX relay server
-make mediamtx-up
-
-# Publish 4 simulated feeds (cam01..cam04) in a loop
-make publishers-up
-```
-
-### 2. Live Stream Formats
-
-The output annotated video can be consumed from MediaMTX in several formats:
-
-- **WebRTC (WHEP)**: `http://localhost:8888/vision1/whep` (used by Web UI player)
-- **HLS (HTTP)**: `http://localhost:8888/vision1/index.m3u8`
-- **RTSP**: `rtsp://localhost:8554/vision1`
-- **RTMP**: `rtmp://localhost:1935/vision1`
-
----
-
-## Docker Deployment
-
-You can launch the complete development or production stack using Docker Compose.
-
-```bash
-# Start the core alert stack (redis, mediamtx, vision-service, telegram-worker)
-make stack-up
-
-# Start the Prometheus + Grafana monitoring dashboard stack
-make monitoring-up
-```
-
-### Viewing Logs
-
-```bash
-# Inspect DeepStream pipeline logs
-docker compose logs -f vision-service
-
-# Inspect Telegram worker logs
-docker compose logs -f telegram-worker
-```
-
-### Stop Services
-
-```bash
-# Stop core services
-make stack-down
-
-# Stop monitoring dashboards
-make monitoring-down
-
-# Stop everything
-make down
-```
-
-### Health & Telemetry Verification
-
-```bash
-# Check Web UI status
-curl http://localhost:8500/api/health
-
-# Check Prometheus metrics export
-curl http://localhost:9105/metrics
-
-# Monitor JSONL events
-tail -f storage/logs/events.jsonl
-```
-
----
-
-## MLOps Pipeline & Model Lifecycle
-
-The project utilizes **DVC (Data Version Control)** and **MLflow** to coordinate automated model training, validation, quality gating, and registration. The pipeline consists of the following automated stages defined in `dvc.yaml`:
-
-```mermaid
-graph TD
-    A[WebDataset Shards] -->|dvc repro extract| B[Extracted Dataset]
-    B -->|dvc repro train| C[YOLOv8 Training & MLflow Log]
-    C -->|dvc repro evaluate| D[Model Quality Gate & Promotion]
-    D -->|dvc repro export| E[ONNX Model Export]
-    E -->|dvc repro compile| F[TensorRT Engine Compilation]
-```
-
-### Pipeline Stages
-
-1. **`extract`**: Extracts raw WebDataset `.tar` shards into a standard YOLO training format folder (`dataset/extracted/yolo_helmet_dataset`).
-2. **`train`**: Trains the YOLOv8 model based on hyperparameters in `params.yaml`, logs metrics to the MLflow tracking server, and automatically registers the trained weights to the MLflow Model Registry with the **`Candidate`** alias (preventing unverified models from auto-deploying).
-3. **`evaluate`**: Runs the **Model Quality Gate** ([evaluate_model.py](file:///mmlab_students/storageStudents/nguyenvd/uit_medseg/CS317_MLOps/scripts/evaluate_model.py)). It compares **Candidate** vs current **Production** on the Gold Standard dataset using multi-metric rules (`mAP50`, `recall(no_helmet)`, `precision(no_helmet)`, and no increase in FN when available). The stage always writes `evaluate_status.json`; `rejected` means a valid business rejection (not a pipeline crash). If accepted, Candidate is promoted to `Production`.
-4. **`export`**: Reads `evaluate_status.json` and writes `export_status.json`. If `promote=false`, export is marked `skipped` and the current Production ONNX/engine is kept. If `promote=true`, it pulls the model from MLflow Registry alias **`Production`** and exports to `apps/vision_service/models/yolov8/yolov8_helmet.onnx`.
-5. **`compile`**: Runs the NVIDIA TensorRT builder container to compile the ONNX model into a GPU-specific FP16 TensorRT engine (`yolov8_helmet.onnx_b1_gpu0_fp16.engine`).
-
-### Usage
-
-Prepare new incoming data into WebDataset shards:
-```bash
-# format_data_new_yolo -> split_yolo_dataset -> pack_yolo_to_shards
-make prepare-data
-```
-
-By default, `prepare-data` now syncs detect outputs from:
-- `storage/logs/events.jsonl` (bbox/class metadata)
-- `storage/snapshots/` (violation snapshots)
-into `dataset/data_new` before formatting/splitting/sharding.
-
-If you want to skip this sync and use an existing manual raw folder:
-```bash
-make prepare-data PREP_SYNC_FROM_STORAGE=0 PREP_RAW_DIR=dataset/data_new
-```
-
-Run main retrain pipeline:
-```bash
-# extract -> train -> evaluate -> export -> compile
-make retrain
-```
-
-Run the entire automated MLOps pipeline (data pull, training, evaluation, and compilation):
-```bash
-make mlops-pipeline
-```
-
-Deploy the newly promoted and compiled model via symlink and safe container restart (zero downtime / hot reload alternative):
-```bash
-make deploy-model
-```
-
-Run specific pipeline stages manually:
-```bash
-# To only extract data
-dvc repro extract
-
-# To only train
-dvc repro train
-
-# To run the Model Quality Gate / evaluation manually
-dvc repro evaluate
-
-# To export the production model from MLflow Registry
-dvc repro export
-
-# To compile ONNX to TensorRT
-dvc repro compile
-```
-
----
-
-## Development & Testing
-
-### Web UI Control Plane
-
-The FastAPI dashboard is located at `apps/web_ui`. It runs independently of the pipeline and communicates with it via REST calls.
-
-To run locally for development:
-```bash
-uvicorn apps.web_ui.app:app --host 0.0.0.0 --port 8500 --reload
-```
-
-Open a web browser and navigate to `http://localhost:8500` to view the stream dashboard and manage active camera configurations.
-
-### Code Formatting
-
-```bash
-# Format Python scripts using Black and Isort
-make format
-
-# Check formatting compliance without making changes
-make lint
-```
-
-### Running Tests
-
-Unit test suites for settings, the alert publisher, and the Telegram subscriber are located in `apps/vision_service/tests/`:
-
-```bash
-# Run pytest with detailed verbose outputs
-make test
-```
-
-### Adding a New Rule
-
-1. Edit the core detection loop in `apps/vision_service/src/probes/infer_probe.py` inside `_on_buffer_probe`.
-2. Define the classification and condition logic (e.g. tracking thresholds, specific classes, or confidence limits).
-3. If a violation is identified, the logic publishes the event using `publisher.publish(...)` and uses `_should_emit_telegram_alert(...)` to dispatch it asynchronously through the `redis_alert_publisher`.
-
-### Adding a New Camera
-
-- **Option 1 (Zero Downtime Web UI)**: Open the Web UI dashboard on port 8500 and use the Camera Management panel to add a camera stream link. It will automatically issue a REST request to DeepStream to add it to the pipeline without stopping the service, and save the camera config to disk.
-- **Option 2 (Manual config)**: Create an individual camera YAML file under `apps/vision_service/configs/camera/camera_*.yaml`. The settings loader scans the folder dynamically upon startup.
-
----
-
-## Authors & License
-
-| | |
-|---|---|
-| **Project** | UIT-MedSeg MLOps |
-| **Organization** | [UIT MMLab](https://mmlab.uit.edu.vn) — University of Information Technology, VNU-HCM |
-| **License** | MIT |
-| **Contact** | mmlab@uit.edu.vn |
-
-Contributions are welcome! Please open an issue or submit a pull request.
-
----
-
-*Built with NVIDIA DeepStream 6.4 · GStreamer · Python 3 · Pydantic · FastAPI · DVC · MLflow*

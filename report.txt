@@ -1,0 +1,597 @@
+ĐẠI HỌC QUỐC GIA THÀNH PHỐ HỒ CHÍ MINH
+TRƯỜNG ĐẠI HỌC CÔNG NGHỆ THÔNG TIN
+CS317 – Phát triển và vận hành hệ thống máy học
+
+------------
+
+BÁO CÁO CUỐI KÌ
+HỆ THỐNG PHÁT HIỆN VI PHẠM
+KHÔNG ĐỘI MŨ BẢO HIỂM Ở CỔNG
+TRƯỜNG THEO THỜI GIAN THỰC
+Giảng viên hướng dẫn:
+
+ThS. Đỗ Văn Tiến
+
+Sinh viên 1:
+
+Đỗ Minh Dũng – 23520326
+
+Sinh viên 2:
+
+Huỳnh Diên Thục – 23521555
+
+Sinh viên 3:
+
+Trần Minh Vũ – 23521819
+
+Lớp:
+Nhóm:
+
+CS317.Q22
+5
+
+TP. Hồ Chí Minh, June 2026
+
+MỤC LỤC
+Chương 1
+
+GIỚI THIỆU CHUNG .............................................................. 3
+
+1.1
+
+Bài toán đặt ra ........................................................................................... 3
+
+1.2
+
+Mục tiêu đồ án .......................................................................................... 3
+
+1.3
+
+Bảng phân công công việc ........................................................................ 4
+
+1.4
+
+Source ....................................................................................................... 4
+
+Chương 2
+
+CƠ SỞ CÔNG NGHỆ VÀ KIẾN TRÚC HỆ THỐNG .......... 5
+
+2.1
+
+Tổng quan các công nghệ lõi .................................................................... 5
+
+2.2
+
+Kiến trúc hệ thống..................................................................................... 6
+
+2.3
+
+Vì sao sử dụng YOLOv8 ?........................................................................ 7
+
+2.4
+
+Control plane và dịch vụ phụ trợ............................................................... 7
+
+Chương 3
+
+MLOPS PIPELINE ................................................................... 8
+
+3.1
+
+Data collection .......................................................................................... 8
+
+3.2
+
+Data version control - DVC ...................................................................... 9
+
+3.3
+
+MLFlow .................................................................................................... 9
+
+3.3.1
+
+MLFlow Tracking ............................................................................................. 10
+
+3.3.1.1
+
+Training & Evaluation .................................................................................... 10
+
+3.3.1.2
+
+Kết quả huấn luyện và đánh giá YOLOv8...................................................... 10
+
+3.3.2
+
+MLFlow Registry .............................................................................................. 10
+
+i
+
+3.3.3
+
+Export & TensorRT........................................................................................... 11
+
+3.4
+
+DeepStream ............................................................................................. 11
+
+3.5
+
+Cơ chế cảnh báo Telegram...................................................................... 11
+
+3.6
+
+Docker..................................................................................................... 12
+
+3.6.1
+
+Docker hóa môi trường ..................................................................................... 12
+
+3.6.2
+
+Docker Compose và các service ........................................................................ 12
+
+3.7
+
+Grafana & Prometheus ............................................................................ 12
+
+3.8
+
+Web lưu trữ hình ảnh vi phạm ................................................................ 13
+
+Chương 4
+
+KẾT LUẬN .............................................................................. 14
+
+ii
+
+CHƯƠNG 1
+
+1.1
+
+GIỚI THIỆU CHUNG
+
+Bài toán đặt ra
+Ở cổng trường hoặc các khu vực có mật độ xe máy cao, việc kiểm
+
+soát hành vi không đội mũ bảo hiểm thường phụ thuộc nhiều vào quan
+sát thủ công. Cách làm thủ công khó mở rộng khi số lượng camera tăng,
+dễ bỏ sót trong giờ cao điểm và không tạo được lịch sử vi phạm có cấu
+trúc để phục vụ theo dõi về sau.
+Đồ án xây dựng một hệ thống thị giác máy tính nhằm tự động phát
+hiện hành vi đi xe máy không đội mũ bảo hiểm từ luồng camera stream.
+Đầu ra của hệ thống là video đã gắn bounding box, nhãn nhận dạng, track
+ID và cảnh báo Telegram khi phát hiện vi phạm. Bên cạnh mô hình
+YOLOv8, đồ án tập trung vào toàn bộ vòng đời MLOps: dữ liệu, huấn
+luyện, tracking thí nghiệm, registry, export model, triển khai, giám sát và
+vận hành.
+
+1.2
+−
+−
+−
+−
+
+Mục tiêu đồ án
+Xây dựng pipeline phát hiện vi phạm không đội mũ bảo hiểm theo
+thời gian thực từ nhiều camera hoặc video stream.
+Huấn luyện và đánh giá mô hình YOLOv8 cho hai trạng thái
+helmet/no_helmet, ưu tiên chất lượng phát hiện lớp no_helmet.
+Tích hợp DeepStream, NvDCF Tracker, Redis và Telegram Bot để
+tạo luồng xử lý video và cảnh báo bất đồng bộ.
+Áp dụng DVC và MLflow để version hóa dữ liệu, tracking
+experiment, quản lý model registry và kiểm soát việc promote model
+lên Production.
+
+3
+
+−
+
+1.3
+
+Triển khai hệ thống bằng Docker Compose và giám sát bằng
+Prometheus/Grafana.
+
+Bảng phân công công việc
+MSSV
+
+Đỗ Minh Dũng
+
+23520326
+
+Thu thập dữ liệu, gán nhãn CVAT,
+Telegram, DVC retrain
+
+100%
+
+Huỳnh Diên Thục
+
+23521555
+
+Triển khai DVC, DeepStream,
+MLFlow, Redis
+
+100%
+
+Trần Minh Vũ
+
+23521819
+
+Xây dựng core DeepStream,
+Grafana, Web lưu trữ hình ảnh các
+vi phạm.
+
+100%
+
+1.4
+
+Công việc đảm nhận
+
+Mức độ hoàn
+thành
+
+Thành viên
+
+Source
+
+Link Github: https://github.com/tranminhvu945/CS317_MLOps
+Demo: Video demo được nộp cùng với file final report này.
+
+4
+
+CHƯƠNG 2
+
+CƠ SỞ CÔNG NGHỆ VÀ KIẾN
+TRÚC HỆ THỐNG
+
+2.1
+
+Tổng quan các công nghệ lõi
+Đồ án kết hợp nhiều công nghệ để hình thành một hệ thống MLOps
+
+hoàn chỉnh cho bài toán thị giác máy tính thời gian thực. Các thành phần
+không hoạt động riêng lẻ mà được nối thành một pipeline từ dữ liệu, mô
+hình, inference, cảnh báo đến giám sát.
+
+Thành phần
+
+Công nghệ sử dụng
+
+YOLOv8
+AI & Video Pipeline
+
+NvDCF Tracker
+DeepStream
+
+Control Plan & API
+
+FastAPI, REST API
+
+Vai trò trong hệ thống
+
+Phát hiện đối tượng và trạng
+thái đội mũ/không đội mũ.
+Gán track ID cho đối tượng
+qua nhiều frame.
+Tối ưu pipeline xử lý video
+nhiều luồng trên GPU.
+Quản lý camera, trạng thái
+service và dashboard.
+5
+
+Redis
+Message/notification
+
+Telegram Bot API
+OpenCV
+DVC
+MLflow
+
+MLOps Lifecycle
+
+Docker Compose
+ONNX, TensorRT
+MediaMTX
+
+Telemetry/monitoring
+
+2.2
+
+Prometheus/Grafana
+
+Hàng đợi sự kiện vi phạm.
+Gửi cảnh báo vi phạm đến
+người quản trị.
+Hỗ trợ xử lý ảnh, video trước
+khi gửi tin nhắn Telegram
+Version hóa dữ liệu và pipeline
+dữ liệu.
+Tracking experiment, lưu
+artifact, quản lý model registry.
+Điều phối các service triển
+khai.
+Export mô hình AI sang định
+dạng phù hợp.
+Relay luồng video output cho
+demo hoặc giám sát.
+Theo dõi, giám sát tài nguyên
+hệ thống, FPS, latency và số vi
+phạm
+
+Kiến trúc hệ thống
+
+Luồng xử lý chính bắt đầu từ camera hoặc HLS/RTSP stream. Các
+frame được đưa vào DeepStream, gom batch bằng nvstreammux, chạy
+qua YOLOv8 (nvinfer) để phát hiện helmet/no_helmet, sau đó chuyển
+
+6
+
+sang NvDCF Tracker để duy trì track ID. Kết quả được vẽ lên video bằng
+OSD và xuất ra luồng RTMP/HLS thông qua MediaMTX Relay Server.
+Song song với luồng video chính là luồng cảnh báo vi phạm. Khi
+InferProbe phát hiện một track ID vi phạm đủ số frame liên tiếp, hệ thống
+tạo sự kiện gồm camera ID, thời điểm, track ID, class_name, confidence,
+bounding box và ảnh snapshot. Sự kiện được ghi vào events.jsonl, đẩy
+vào Redis và được Telegram worker gửi đến nhóm quản trị.
+
+2.3
+
+Vì sao sử dụng YOLOv8 ?
+YOLOv8 là mô hình one-stage object detector, phù hợp với các bài
+
+toán cần tốc độ suy luận cao. Trong đồ án, YOLOv8 đóng vai trò phát
+hiện các lớp đối tượng liên quan đến người đi xe máy và trạng thái đội
+mũ bảo hiểm. Bài toán có nhiều thách thức như đối tượng nhỏ, chuyển
+động nhanh, bị che khuất, thay đổi góc nhìn camera và điều kiện ánh sáng
+ngoài trời.
+Việc dùng YOLOv8 giúp cân bằng giữa độ chính xác và tốc độ.
+Khi triển khai production, model được export sang ONNX và compile
+thành TensorRT FP16 engine để tận dụng GPU tốt hơn trong
+DeepStream. Đây là điểm quan trọng vì hệ thống cần xử lý nhiều luồng
+camera đồng thời mà vẫn bảo đảm cảnh báo kịp thời.
+
+2.4
+
+Control plane và dịch vụ phụ trợ
+FastAPI cung cấp giao diện API và dashboard để cấu hình, thêm,
+
+xóa, bật/tắt hoặc theo dõi trạng thái camera. Redis được dùng như
+message broker nhẹ cho sự kiện vi phạm. Telegram Bot API phụ trách
+gửi cảnh báo đến người quản trị. Các thành phần này được tách thành
+7
+
+service riêng trong Docker Compose để dễ thay thế, mở rộng và khởi
+động lại độc lập khi có lỗi.
+
+CHƯƠNG 3
+
+3.1
+−
+−
+
+−
+−
+
+MLOPS PIPELINE
+
+Data collection
+Dữ liệu ban đầu được lấy từ helmet-dataset trên Kaggle để huấn
+luyện mô hình YOLOv8 cơ sở. Bộ dữ liệu này gồm 70k bức ảnh và
+convert thành 2 lớp: helmet và no_helmet.
+Nhóm tiến hành thu thập và gán nhãn thủ công bằng CVAT cho 1000
+mẫu dữ liệu từ camera thực tế ở cổng trường. Dữ liệu này được chia
+thành 700 mẫu để retrain lại model base ban đầu và 300 mẫu dùng để
+làm Gold Standard.
+Tập Gold Standard được dùng trong bước evaluate_model.py để
+quyết định model candidate có đủ điều kiện promote lên Production
+hay không.
+Trong quá trình triển khai, hệ thống có thể dùng model hiện tại để tạo
+pseudo-label cho dữ liệu mới. Các nhãn kém tin cậy được lọc trước
+khi đưa vào vòng retraining.
+
+8
+
+3.2
+−
+−
+−
+−
+
+3.3
+
+Data version control - DVC
+DVC dùng để quản lý phiên bản dữ liệu và pipeline xử lý dữ liệu.
+Mỗi vòng retraining tạo ra một snapshot dữ liệu gồm dữ liệu thu thập,
+pseudo-label, dữ liệu đã lọc và split train/val/test.
+Đóng gói dữ liệu thành WebDataset shards, điều này giúp thuận lợi
+cho huấn luyện, sao chép và tái lập thí nghiệm.
+Khi kết hợp DVC với Git, nhóm có thể biết chính xác phiên bản dữ
+liệu nào đã được dùng để tạo ra một phiên bản model.
+
+MLFlow
+
+9
+
+3.3.1
+
+MLFlow Tracking
+
+3.3.1.1
+
+Training & Evaluation
+
+Quá trình huấn luyện YOLOv8 được thực hiện trong môi trường
+Docker có sẵn Ultralytics, MLflow và CUDA drivers. Các tham số quan
+trọng cần lưu lại gồm số epoch, batch size, kích thước ảnh, patience, thiết
+bị huấn luyện và optimizer. Trong mỗi epoch, MLflow ghi log training
+loss, validation loss và các metrics phát hiện đối tượng như precision,
+recall, mAP50 và mAP50-95. Artifact quan trọng nhất là best.pt, tức
+checkpoint tốt nhất theo tiêu chí đánh giá.
+3.3.1.2
+
+Kết quả huấn luyện và đánh giá YOLOv8
+
+Version
+1
+2
+3
+3.3.2
+
+precision
+0.8284
+0.6479
+0.6228
+
+recall
+0.6112
+0.6101
+0.7083
+
+mAP50
+0.6815
+0.6481
+0.7085
+
+mAP50-95
+0.4977
+0.4600
+0.5237
+
+MLFlow Registry
+
+MLflow Registry được dùng để quản lý vòng đời model theo các
+trạng thái Candidate và Production. Sau mỗi lần train, checkpoint tốt nhất
+không được đưa thẳng vào hệ thống chạy thật mà được đăng ký như
+Candidate. Stage evaluate_model.py so sánh Candidate với model
+Production hiện tại trên tập Gold Standard. Nếu Candidate đạt quality
+gate thì mới được promote lên Production; nếu không đạt, hệ thống tiếp
+tục dùng model Production cũ để bảo đảm độ ổn định.
+
+10
+
+3.3.3
+
+Export & TensorRT
+
+Sau khi model YOLOv8 đạt quality gate, pipeline export tải model
+Production mới nhất từ MLflow, chuyển đổi sang ONNX và compile
+thành TensorRT engine. TensorRT giúp tận dụng GPU hiệu quả hơn,
+giảm latency và tăng FPS khi xử lý video. Trong bối cảnh nhiều camera,
+tối ưu inference là yêu cầu quan trọng để tránh backlog frame và bảo đảm
+cảnh báo kịp thời.
+
+3.4
+
+DeepStream
+DeepStream là thành phần triển khai inference video trong môi
+
+trường production. Thay vì xử lý từng frame bằng OpenCV thuần,
+DeepStream sử dụng GStreamer và các plugin tăng tốc GPU để nhận
+nhiều luồng camera, gom batch bằng nvstreammux, chạy YOLOv8 qua
+nvinfer, theo dõi đối tượng bằng nvtracker/NvDCF, vẽ bounding box
+bằng OSD và xuất luồng đã annotate qua RTMP/HLS.
+−
+−
+−
+
+3.5
+
+Ưu điểm chính là tận dụng GPU tốt hơn, giảm CPU overhead và phù
+hợp với bài toán nhiều camera.
+Tracker giúp duy trì track ID ổn định qua nhiều frame, từ đó tránh
+gửi nhiều cảnh báo cho cùng một người vi phạm.
+Các probe trong pipeline cho phép trích metadata, ảnh snapshot và
+metrics runtime mà không làm gián đoạn luồng video chính.
+
+Cơ chế cảnh báo Telegram
+Khi YOLOv8 và tracker xác định một đối tượng vi phạm, sự kiện
+
+được gửi vào Redis queue. Telegram worker đọc sự kiện, tạo nội dung
+cảnh báo và gửi đến nhóm quản trị. Nội dung thông báo nên gồm camera
+ID, thời gian, track ID, nhãn vi phạm, độ tin cậy và ảnh minh họa. Để
+
+11
+
+tránh spam, hệ thống cần có cơ chế debounce theo track ID, ví dụ không
+gửi lại cùng một track ID trong một khoảng thời gian ngắn.
+
+3.6
+3.6.1
+−
+
+3.6.2
+−
+
+−
+
+3.7
+−
+
+−
+−
+
+Docker
+Docker hóa môi trường
+
+Docker giúp cô lập môi trường chạy và giảm xung đột thư viện khi
+triển khai trên nhiều máy chủ khác nhau. Đồ án này sử dụng 2 image:
++ Image Training: Đóng gói Ultralytics YOLOv8, MLflow và
+CUDA drivers, giúp quá trình train chạy đồng bộ trên GPU. I
++ mage DeepStream: Gồm TensorRT, GStreamer, DeepStream 6.4
+SDK và driver giải mã video bằng GPU, phục vụ dịch vụ visionservice xử lý stream thực tế.
+Docker Compose và các service
+
+Docker Compose được dùng để quản lý vòng đời nhiều service: redis
+(hàng đợi cảnh báo), mediamtx (relay video stream), telegramworker (gửi tin nhắn), vision-service xử lý inference, prometheus thu
+thập metrics và grafana hiển thị dashboard.
+Kiến trúc này giúp nhóm dễ khởi động toàn bộ hệ thống bằng một
+lệnh, đồng thời có thể restart từng service khi cần mà không ảnh
+hưởng toàn bộ pipeline.
+
+Grafana & Prometheus
+Thông lượng Pipeline (Throughput):
++ FPS đầu vào: Tốc độ nhận khung hình thực tế của từng camera.
++ FPS xử lý AI: Tốc độ xử lý của mô hình YOLOv8 trên GPU.
++ FPS đầu ra: Tốc độ ghi luồng/đẩy RTMP.
+Độ trễ hệ thống (Latency): Thời gian trung bình từ lúc khung hình đi
+vào pipeline đến khi hoàn thành inference.
+System Resource Telemetry:
++ CPU & GPU Utilization: Hiệu suất sử dụng nhân tính toán.
++ RAM & VRAM Utilization: Dung lượng bộ nhớ hệ thống và bộ
+nhớ card đồ họa đang bị chiếm dụng.
++ CPU & GPU Temperature: Nhiệt độ phần cứng để phát hiện tình
+trạng quá nhiệt khi scale nhiều camera.
+
+12
+
+−
+
+Thống kê vi phạm & Trạng thái camera
++ Camera Active: Trạng thái của từng camera (Hoạt động/Mất tín
+hiệu/Chết luồng).
++ Số ca vi phạm: Số lượt vi phạm thực tế dựa trên Tracking ID.
+Hình ảnh từ Grafana:
+
+3.8
+
+Web lưu trữ hình ảnh vi phạm
+Web lưu trữ lại những hình ảnh vi phạm theo từng camera, theo
+
+từng ngày. Điều này phục vụ việc xử lý và đưa ra bằng chứng vi phạm.
+
+13
+
+CHƯƠNG 4
+
+KẾT LUẬN
+
+Đồ án đã xây dựng được một hệ thống MLOps tương đối hoàn
+chỉnh cho bài toán phát hiện vi phạm không đội mũ bảo hiểm theo thời
+gian thực. Hệ thống không chỉ dừng ở việc train mô hình YOLOv8 mà
+còn bao gồm các thành phần cần thiết để đưa mô hình vào vận hành:
+pipeline video DeepStream, tracking, Redis queue, Telegram notification,
+Docker Compose.
+
+14
+
+

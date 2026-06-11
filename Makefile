@@ -63,6 +63,10 @@ run: compile-parser monitoring-up publishers-up
 		$(IMAGE) \
 		python3 /workspace/apps/vision_service/src/main.py
 
+## Start the Web UI Dashboard (FastAPI) on port 8500
+ui:
+	$(PYTHON) -m uvicorn apps.web_ui.app:app --host 0.0.0.0 --port 8500 --reload
+
 # ── Build ─────────────────────────────────────────────────────────────────────
 
 ## Build MLOps training Docker image (containing ultralytics and mlflow)
